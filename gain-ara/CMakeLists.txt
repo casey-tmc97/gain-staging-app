@@ -7,13 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 # Path to the Rust workspace root (relative to this CMakeLists.txt)
-set(RUST_CORE_DIR "${CMAKE_SOURCE_DIR}/../rust-core")
+set(RUST_CORE_DIR "${CMAKE_SOURCE_DIR}/../gain-core")
 
 # The Rust FFI header
 set(FFI_INCLUDE_DIR "${RUST_CORE_DIR}/crates/ffi/include")
 
 # The Rust import library (Windows: .dll.lib)
-# Build the Rust FFI crate first: cd rust-core && cargo build -p ffi --release
+# Build the Rust FFI crate first: cd gain-core && cargo build -p ffi --release
 set(RUST_LIB "${RUST_CORE_DIR}/target/release/gain_stage_ffi.dll.lib")
 
 # ── Verify prerequisites ───────────────────────────────────────────────────────
@@ -21,18 +21,18 @@ set(RUST_LIB "${RUST_CORE_DIR}/target/release/gain_stage_ffi.dll.lib")
 if(NOT EXISTS "${FFI_INCLUDE_DIR}/gain_stage_ffi.h")
     message(FATAL_ERROR
         "FFI header not found at ${FFI_INCLUDE_DIR}/gain_stage_ffi.h\n"
-        "Ensure rust-core/crates/ffi/include/gain_stage_ffi.h exists.")
+        "Ensure gain-core/crates/ffi/include/gain_stage_ffi.h exists.")
 endif()
 
 if(NOT EXISTS "${RUST_LIB}")
     message(FATAL_ERROR
         "Rust import library not found at ${RUST_LIB}\n"
-        "Run: cd rust-core && cargo build -p ffi --release")
+        "Run: cd gain-core && cargo build -p ffi --release")
 endif()
 
 # ── Copy header to local include dir ─────────────────────────────────────────
 
-set(LOCAL_FFI_INCLUDE "${CMAKE_SOURCE_DIR}/rust-core-include")
+set(LOCAL_FFI_INCLUDE "${CMAKE_SOURCE_DIR}/gain-core-include")
 file(MAKE_DIRECTORY "${LOCAL_FFI_INCLUDE}")
 configure_file(
     "${FFI_INCLUDE_DIR}/gain_stage_ffi.h"

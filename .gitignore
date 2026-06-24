@@ -1,10 +1,10 @@
 # Rust
-rust-core/target/
+gain-core/target/
 
 # C++ / CMake
-ara-plugin/build/
-ara-plugin/cmake-build-*/
-ara-plugin/rust-core-include/
+gain-ara/build/
+gain-ara/cmake-build-*/
+gain-ara/gain-core-include/
 *.o
 *.obj
 *.dll
