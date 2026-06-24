@@ -49,7 +49,8 @@ pub extern "C" fn gain_stage_map_region_count(map: *const GainStageMap) -> usize
         return 0;
     }
     // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null and was created by gain_stage_analyze
+    // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
+    // and we hold a shared reference only for the duration of this call.
     unsafe { (*map).0.regions.len() }
 }
 
@@ -74,7 +75,8 @@ pub extern "C" fn gain_stage_map_get_region(
     }
 
     // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null and was created by gain_stage_analyze
+    // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
+    // and we hold a shared reference only for the duration of this call.
     let regions = unsafe { &(*map).0.regions };
     let Some(region) = regions.get(index) else {
         return zeroed;
@@ -109,7 +111,8 @@ pub extern "C" fn gain_stage_map_version(map: *const GainStageMap) -> u32 {
         return 0;
     }
     // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null and was created by gain_stage_analyze
+    // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
+    // and we hold a shared reference only for the duration of this call.
     unsafe { (*map).0.version }
 }
 
