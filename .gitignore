@@ -19,3 +19,6 @@ ara-plugin/cmake-build-*/
 # OS
 Thumbs.db
 .DS_Store
+
+# Superpowers dev tooling
+.superpowers/
