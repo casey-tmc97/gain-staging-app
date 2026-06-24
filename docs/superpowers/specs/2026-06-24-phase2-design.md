@@ -219,8 +219,8 @@ gain-standalone  → gain-api
 - Takes `&AudioBuffer`; all samples **must** be normalized to `[-1.0, 1.0]`. Any sample with `abs() > 1.0` or containing `NaN`/`Inf` is an `InvalidAudio` error.
 - **Normalization contract**: `audio_ingestion` is responsible for delivering normalized `f32` samples via symphonia's built-in PCM conversion. `analysis` enforces the contract but does not re-normalize.
 - Computes **Peak dBFS**: `max_amplitude = samples.iter().map(|s| s.abs()).fold(0f32, f32::max)`. If `max_amplitude == 0.0` (silent buffer), Peak dBFS is `SILENCE_FLOOR_DBFS = -120.0`. Otherwise `20.0 * max_amplitude.log10()`. **Do not use `f32::MIN_POSITIVE` as the clamp** — it maps silence to ≈ −758 dBFS, which is acoustically meaningless and will corrupt crest factor and future classification heuristics. The −120 dBFS floor matches DAW convention (industry range: −120 to −144 dBFS).
-- Computes **RMS dBFS**: computed across **all samples in the flattened interleaved buffer** (no per-channel weighting). `rms = sqrt(sum(s²) / n)`. If `rms == 0.0`, RMS dBFS is `SILENCE_FLOOR_DBFS`. Otherwise `20.0 * rms.log10()`. **Phase 2 RMS is energy-based, not perceptual, and is not intended to match LUFS behavior.** Stereo panning energy may read slightly higher than mono-equivalent. Per-channel weighting and perceptual RMS are deferred to Phase 3.
-- Computes **Crest Factor**: `peak_dbfs − rms_dbfs` (log-domain dB difference, not linear ratio).
+- Computes **RMS dBFS**: computed across **all samples in the flattened interleaved buffer** (no per-channel weighting). `rms = sqrt(sum(s²) / n)`. If `rms == 0.0`, RMS dBFS is `SILENCE_FLOOR_DBFS`. Otherwise `20.0 * rms.log10()`. **Phase 2 RMS is energy-based, not perceptual, and is not LUFS-compatible. It must not be used as a perceptual proxy.** Stereo panning energy may read slightly higher than mono-equivalent. Per-channel weighting and perceptual RMS are deferred to Phase 3.
+- Computes **Crest Factor**: `peak_dbfs − rms_dbfs` (log-domain dB difference, not linear ratio). When audio is silent, both peak and RMS clamp to `SILENCE_FLOOR_DBFS`, so crest factor is `0.0`. **Silence is treated as a zero-dynamic-range signal for crest factor purposes** — future classification logic must not interpret a `0.0` crest factor as "stable audio with a known dynamic range."
 - Sets `integrated_lufs = MeasurementValue { value: None, quality: Placeholder }`. **`integrated_lufs.value` MUST NOT be used in any gain calculation in Phase 2.** It is present for struct completeness only. Consumers must check `quality` before using `value`.
 - Errors: `InvalidAudio` (empty buffer, NaN/Inf samples, samples outside `[-1.0, 1.0]`), `AnalysisFailure`
 
@@ -239,7 +239,7 @@ pub fn recommend(
 - `gain_db = target_db − measured_db`
 - Produces one `GainRegion` covering `0.0` to `duration_secs` with `region_type: RegionType::Stable`
 - `confidence: 1.0` (whole-file measurement is always high confidence)
-- `reason`: purely descriptive string, e.g. `"Applied target of −12 dBFS using Peak measurement"`. **Never encode preset identity in the reason string** — `PresetId` carries identity; `reason` carries description. These must not duplicate each other.
+- `reason`: purely descriptive string, e.g. `"Applied target of −12 dBFS using Peak measurement"`. **Never encode preset identity in the reason string** — `PresetId` carries identity; `reason` carries description. `reason` is strictly non-parsable and must never be used for control flow.
 - Sets `preset_used: Some(preset_id)` — structured `PresetId`, not a string
 
 **`gain-api`** — orchestrates both steps, owns all public types, re-exports `GainError`.
@@ -305,7 +305,7 @@ const char* gain_stage_last_error_message(void);
 
 `gain_stage_last_error_message()` returns a pointer to a static thread-local buffer valid until the next FFI call on the same thread.
 
-**Concurrency limitation:** The thread-local error buffer is **not safe for concurrent cross-thread usage**. DAW hosts that call FFI functions from multiple threads simultaneously (common in ARA hosts with parallel audio source processing) must serialize calls or maintain per-thread error state. This is acceptable for Phase 2 (standalone app is single-threaded at the FFI boundary) but must be addressed before ARA integration in Phase 4.
+**Concurrency and reentrancy limitation:** The thread-local error buffer is **not safe for concurrent cross-thread usage**, and **FFI calls must be treated as non-reentrant at the host level**. Some ARA hosts run batch rendering across multiple audio tracks on a shared thread pool — thread-local state may still collide logically even when calls are technically on different threads. This is acceptable for Phase 2 (standalone app is single-threaded at the FFI boundary) but must be addressed before ARA integration in Phase 4.
 
 ### Deferred to Phase 4
 A C-ABI `AnalysisResult` struct and two-step `gain_stage_generate_recommendation()` — not needed until the ARA plugin requires the split.
@@ -377,8 +377,10 @@ Real audio fixtures (royalty-free, known-loudness files) are deferred to Phase 3
 
 ## Future Watch Items (not Phase 2 scope)
 
-**`gain_map` scope creep:** Phase 2 adds `Measurements`, `MeasurementValue`, `MeasurementQuality`, and `PresetId` to `gain_map`. If Phase 3 continues adding types here, consider splitting into `gain_types` (pure DSP output types) and `gain_map` (recommendation structures). Not necessary now.
+**`gain_map` type-layer blending:** Phase 2 adds `Measurements`, `MeasurementValue`, `MeasurementQuality`, and `PresetId` to `gain_map`, which now serves three roles: DSP result schema, UI model, and decision metadata. If Phase 3 continues adding types here, consider splitting into `gain_types` (pure DSP outputs) and `gain_map` (recommendation/UI layer). This is the first sign of type-layer blending — watch for it.
 
-**`gain_decision` coupling:** `gain_decision → gain_map` is acceptable for Phase 2. If a future context needs the decision math without the data model (e.g. a WASM module or server pipeline), this dependency may need to be broken by introducing a thin interface layer.
+**`gain_decision` structural scaling pressure:** `gain_decision → gain_map` is the only architectural coupling that could constrain future reuse. If a WASM DSP engine, server-side batch processor, or plugin-only decision context is introduced, this dependency may need to be broken by introducing a thin interface layer. This is the single known structural scaling pressure point in the Phase 2 design.
 
-**FFI `Custom` preset:** Deferred in Phase 2. When exposed, will require a new function signature rather than overloading the `uint8` preset parameter — plan the ABI extension before Phase 4 FFI work begins.
+**FFI `Custom` preset ABI:** Deferred in Phase 2. When exposed, **use a struct-based ABI rather than extending the `uint8` flag space** — overloading byte flags for parameterized presets is a dead end. The ABI extension should be designed before Phase 4 FFI work begins.
+
+**FFI non-reentrancy at scale:** Phase 4 ARA integration must design a per-call or per-session error context rather than thread-local state. The correct solution is likely a context handle passed into each FFI call, similar to OpenAL's `ALCcontext*` pattern.
