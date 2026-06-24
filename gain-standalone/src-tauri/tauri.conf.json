@@ -1,0 +1,20 @@
+{
+  "productName": "Gain Stage",
+  "version": "0.1.0",
+  "identifier": "org.gainstage.app",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Gain Stage",
+        "width": 1200,
+        "height": 800
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}
