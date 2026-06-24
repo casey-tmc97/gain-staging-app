@@ -10,10 +10,10 @@ extern "C" {
 typedef struct GainStageMap GainStageMap;
 
 /* region_type values */
-#define GAIN_STAGE_REGION_STABLE    0
-#define GAIN_STAGE_REGION_TRANSIENT 1
-#define GAIN_STAGE_REGION_ENVELOPE  2
-#define GAIN_STAGE_REGION_MIXED     3
+#define GAIN_STAGE_REGION_STABLE              0
+#define GAIN_STAGE_REGION_TRANSIENT           1
+#define GAIN_STAGE_REGION_ENVELOPE_CONTROLLED 2
+#define GAIN_STAGE_REGION_MIXED               3
 
 /* POD struct safe to copy across the FFI boundary. */
 typedef struct {
@@ -50,6 +50,9 @@ size_t gain_stage_map_region_count(const GainStageMap* map);
  * Returns a zeroed CGainRegion if map is NULL or index is out of range.
  */
 CGainRegion gain_stage_map_get_region(const GainStageMap* map, size_t index);
+
+/* Return the schema version of the map. Returns 0 if map is NULL. */
+uint32_t gain_stage_map_version(const GainStageMap* map);
 
 #ifdef __cplusplus
 } /* extern "C" */

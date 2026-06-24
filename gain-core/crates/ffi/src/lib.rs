@@ -11,7 +11,7 @@ pub struct CGainRegion {
     pub end_time: f64,
     pub gain_db: f32,
     pub confidence: f32,
-    /// 0=Stable 1=Transient 2=Envelope 3=Mixed
+    /// 0=Stable 1=Transient 2=EnvelopeControlled 3=Mixed
     pub region_type: u8,
     pub reason: [u8; 64],
 }
@@ -36,9 +36,8 @@ pub extern "C" fn gain_stage_free_map(map: *mut GainStageMap) {
     if map.is_null() {
         return;
     }
-    // SAFETY: map was created by Box::into_raw in gain_stage_analyze,
-    // was returned by gain_stage_analyze, and this function is only
-    // called once per map (caller contract).
+    // SAFETY: map is non-null and was created by Box::into_raw in gain_stage_analyze;
+    // caller guarantees it was returned by gain_stage_analyze and has not been freed.
     unsafe { drop(Box::from_raw(map)) };
 }
 
@@ -50,8 +49,7 @@ pub extern "C" fn gain_stage_map_region_count(map: *const GainStageMap) -> usize
         return 0;
     }
     // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null and was created by gain_stage_analyze;
-    // we hold a shared reference for the duration of this call.
+    // SAFETY: map is non-null and was created by gain_stage_analyze
     unsafe { (*map).0.regions.len() }
 }
 
@@ -76,18 +74,17 @@ pub extern "C" fn gain_stage_map_get_region(
     }
 
     // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null and was created by gain_stage_analyze;
-    // we hold a shared reference for the duration of this call.
+    // SAFETY: map is non-null and was created by gain_stage_analyze
     let regions = unsafe { &(*map).0.regions };
     let Some(region) = regions.get(index) else {
         return zeroed;
     };
 
     let region_type_byte = match region.region_type {
-        RegionType::Stable => 0u8,
-        RegionType::Transient => 1u8,
-        RegionType::Envelope => 2u8,
-        RegionType::Mixed => 3u8,
+        RegionType::Stable           => 0u8,
+        RegionType::Transient        => 1u8,
+        RegionType::EnvelopeControlled => 2u8,
+        RegionType::Mixed            => 3u8,
     };
 
     let mut reason_buf = [0u8; 64];
@@ -103,6 +100,17 @@ pub extern "C" fn gain_stage_map_get_region(
         region_type: region_type_byte,
         reason: reason_buf,
     }
+}
+
+/// Return the schema version of the map. Returns 0 if map is NULL.
+#[no_mangle]
+pub extern "C" fn gain_stage_map_version(map: *const GainStageMap) -> u32 {
+    if map.is_null() {
+        return 0;
+    }
+    // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
+    // SAFETY: map is non-null and was created by gain_stage_analyze
+    unsafe { (*map).0.version }
 }
 
 #[cfg(test)]
@@ -133,6 +141,14 @@ mod tests {
         let map = gain_stage_analyze(samples.as_ptr(), samples.len(), 44100);
         let region = gain_stage_map_get_region(map, 0);
         assert_eq!(region.gain_db, 0.0);
+        gain_stage_free_map(map);
+    }
+
+    #[test]
+    fn map_version_is_one() {
+        let samples: Vec<f32> = vec![0.0f32; 1024];
+        let map = gain_stage_analyze(samples.as_ptr(), samples.len(), 44100);
+        assert_eq!(gain_stage_map_version(map), 1);
         gain_stage_free_map(map);
     }
 }
