@@ -1,0 +1,21 @@
+# Rust
+rust-core/target/
+
+# C++ / CMake
+ara-plugin/build/
+ara-plugin/cmake-build-*/
+*.o
+*.obj
+*.dll
+*.lib
+*.exp
+*.pdb
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
