@@ -7,5 +7,6 @@ members = [
     "crates/classification",
     "crates/gain_decision",
     "crates/gain_map",
+    "crates/gain-api",
     "crates/ffi",
 ]

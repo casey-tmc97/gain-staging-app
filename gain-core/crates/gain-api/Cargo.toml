@@ -1,0 +1,8 @@
+[package]
+name = "gain-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gain_map     = { path = "../gain_map" }
+gain_decision = { path = "../gain_decision" }

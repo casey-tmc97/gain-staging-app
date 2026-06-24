@@ -1,4 +1,4 @@
-use gain_map::{GainRecommendationMap, RegionType};
+use gain_api::{GainRecommendationMap, RegionType};
 
 // Opaque handle — C++ holds a raw pointer, never sees internals
 pub struct GainStageMap(GainRecommendationMap);
