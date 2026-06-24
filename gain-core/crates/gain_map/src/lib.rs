@@ -1,3 +1,6 @@
+/// Schema version stamped into every GainRecommendationMap at construction.
+pub const GAIN_MAP_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegionType {
     Stable,
@@ -24,7 +27,7 @@ pub struct GainRecommendationMap {
 
 impl Default for GainRecommendationMap {
     fn default() -> Self {
-        Self { version: 1, regions: Vec::new() }
+        Self { version: GAIN_MAP_SCHEMA_VERSION, regions: Vec::new() }
     }
 }
 

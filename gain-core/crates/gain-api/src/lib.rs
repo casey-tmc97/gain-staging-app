@@ -1,4 +1,4 @@
-pub use gain_map::{GainRecommendationMap, GainRegion, RegionType};
+pub use gain_map::{GainRecommendationMap, GainRegion, RegionType, GAIN_MAP_SCHEMA_VERSION};
 
 #[derive(Debug)]
 pub enum GainError {
