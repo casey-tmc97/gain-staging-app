@@ -1,11 +1,18 @@
 use gain_api::{GainRecommendationMap, RegionType};
 
+// Catches Rust panics at the FFI boundary so they cannot unwind into C++ UB.
+// All exported functions use this wrapper; safe sentinels are returned on panic.
+fn ffi_guard<T>(f: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
 // Opaque handle — C++ holds a raw pointer, never sees internals
 pub struct GainStageMap(GainRecommendationMap);
 
 // POD region struct safe to pass across the C ABI boundary.
 // reason is fixed-size to avoid lifetime issues across the boundary.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct CGainRegion {
     pub start_time: f64,
     pub end_time: f64,
@@ -17,7 +24,7 @@ pub struct CGainRegion {
 }
 
 /// Analyze audio samples and return an opaque GainStageMap handle.
-/// Returns null only on allocation failure (should not occur in practice).
+/// Returns null on panic or allocation failure.
 /// Caller must free the returned pointer with `gain_stage_free_map`.
 #[no_mangle]
 pub extern "C" fn gain_stage_analyze(
@@ -25,8 +32,11 @@ pub extern "C" fn gain_stage_analyze(
     _count: usize,
     _sample_rate: u32,
 ) -> *mut GainStageMap {
-    let map = GainRecommendationMap::default();
-    Box::into_raw(Box::new(GainStageMap(map)))
+    ffi_guard(|| {
+        let map = GainRecommendationMap::default();
+        Box::into_raw(Box::new(GainStageMap(map)))
+    })
+    .unwrap_or(std::ptr::null_mut())
 }
 
 /// Free a GainStageMap previously returned by `gain_stage_analyze`.
@@ -36,9 +46,11 @@ pub extern "C" fn gain_stage_free_map(map: *mut GainStageMap) {
     if map.is_null() {
         return;
     }
-    // SAFETY: map is non-null and was created by Box::into_raw in gain_stage_analyze;
-    // caller guarantees it was returned by gain_stage_analyze and has not been freed.
-    unsafe { drop(Box::from_raw(map)) };
+    ffi_guard(|| {
+        // SAFETY: map is non-null and was created by Box::into_raw in gain_stage_analyze;
+        // caller guarantees it was returned by gain_stage_analyze and has not been freed.
+        unsafe { drop(Box::from_raw(map)) };
+    });
 }
 
 /// Return the number of regions in the map.
@@ -48,14 +60,16 @@ pub extern "C" fn gain_stage_map_region_count(map: *const GainStageMap) -> usize
     if map.is_null() {
         return 0;
     }
-    // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
-    // and we hold a shared reference only for the duration of this call.
-    unsafe { (*map).0.regions.len() }
+    ffi_guard(|| {
+        // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
+        // and we hold a shared reference only for the duration of this call.
+        unsafe { (*map).0.regions.len() }
+    })
+    .unwrap_or(0)
 }
 
 /// Return a copy of the region at the given index as a C-compatible struct.
-/// If map is null or index is out of range, returns a zeroed CGainRegion.
+/// If map is null, index is out of range, or a panic occurs, returns a zeroed CGainRegion.
 #[no_mangle]
 pub extern "C" fn gain_stage_map_get_region(
     map: *const GainStageMap,
@@ -74,46 +88,50 @@ pub extern "C" fn gain_stage_map_get_region(
         return zeroed;
     }
 
-    // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
-    // and we hold a shared reference only for the duration of this call.
-    let regions = unsafe { &(*map).0.regions };
-    let Some(region) = regions.get(index) else {
-        return zeroed;
-    };
+    ffi_guard(|| {
+        // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
+        // and we hold a shared reference only for the duration of this call.
+        let regions = unsafe { &(*map).0.regions };
+        let Some(region) = regions.get(index) else {
+            return zeroed;
+        };
 
-    let region_type_byte = match region.region_type {
-        RegionType::Stable           => 0u8,
-        RegionType::Transient        => 1u8,
-        RegionType::EnvelopeControlled => 2u8,
-        RegionType::Mixed            => 3u8,
-    };
+        let region_type_byte = match region.region_type {
+            RegionType::Stable             => 0u8,
+            RegionType::Transient          => 1u8,
+            RegionType::EnvelopeControlled => 2u8,
+            RegionType::Mixed              => 3u8,
+        };
 
-    let mut reason_buf = [0u8; 64];
-    let bytes = region.reason.as_bytes();
-    let len = bytes.len().min(63);
-    reason_buf[..len].copy_from_slice(&bytes[..len]);
+        let mut reason_buf = [0u8; 64];
+        let bytes = region.reason.as_bytes();
+        let len = bytes.len().min(63);
+        reason_buf[..len].copy_from_slice(&bytes[..len]);
 
-    CGainRegion {
-        start_time: region.start_time,
-        end_time: region.end_time,
-        gain_db: region.gain_db,
-        confidence: region.confidence,
-        region_type: region_type_byte,
-        reason: reason_buf,
-    }
+        CGainRegion {
+            start_time: region.start_time,
+            end_time: region.end_time,
+            gain_db: region.gain_db,
+            confidence: region.confidence,
+            region_type: region_type_byte,
+            reason: reason_buf,
+        }
+    })
+    .unwrap_or(zeroed)
 }
 
-/// Return the schema version of the map. Returns 0 if map is NULL.
+/// Return the schema version of the map. Returns 0 if map is NULL or on panic.
 #[no_mangle]
 pub extern "C" fn gain_stage_map_version(map: *const GainStageMap) -> u32 {
     if map.is_null() {
         return 0;
     }
-    // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
-    // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
-    // and we hold a shared reference only for the duration of this call.
-    unsafe { (*map).0.version }
+    ffi_guard(|| {
+        // SAFETY: map is non-null, was created by Box::into_raw in gain_stage_analyze,
+        // and we hold a shared reference only for the duration of this call.
+        unsafe { (*map).0.version }
+    })
+    .unwrap_or(0)
 }
 
 #[cfg(test)]
