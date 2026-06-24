@@ -4,6 +4,7 @@ rust-core/target/
 # C++ / CMake
 ara-plugin/build/
 ara-plugin/cmake-build-*/
+ara-plugin/rust-core-include/
 *.o
 *.obj
 *.dll
