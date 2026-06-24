@@ -3,7 +3,7 @@ use crate::dto::{GainMapDto, GainRegionDto};
 #[tauri::command]
 pub fn analyze(path: String) -> Result<GainMapDto, String> {
     let map = gain_api::analyze_file(std::path::Path::new(&path))
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| format!("{e}"))?;
     Ok(GainMapDto {
         version: map.version,
         regions: map.regions.iter().map(|r| GainRegionDto {

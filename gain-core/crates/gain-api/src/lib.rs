@@ -7,6 +7,18 @@ pub enum GainError {
     AnalysisFailed(String),
 }
 
+impl std::fmt::Display for GainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GainError::FileNotFound(path)     => write!(f, "file not found: {path}"),
+            GainError::UnsupportedFormat(ext) => write!(f, "unsupported format: {ext}"),
+            GainError::AnalysisFailed(reason) => write!(f, "analysis failed: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for GainError {}
+
 /// Analyze an audio file and return a GainRecommendationMap.
 /// Stub: returns an empty map with version = 1 regardless of input.
 pub fn analyze_file(path: &std::path::Path) -> Result<GainRecommendationMap, GainError> {

@@ -2,6 +2,12 @@
 gain-core/target/
 gain-standalone/target/
 
+# dist/ scaffold: index.html must remain committed (tauri-build requires the
+# path to exist at compile time). Only ignore generated build artifacts.
+gain-standalone/dist/*.js
+gain-standalone/dist/*.css
+gain-standalone/dist/*.wasm
+
 # C++ / CMake
 gain-ara/build/
 gain-ara/cmake-build-*/
