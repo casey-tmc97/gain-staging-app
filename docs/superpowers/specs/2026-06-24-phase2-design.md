@@ -218,10 +218,10 @@ gain-standalone  → gain-api
 **`analysis`**
 - Takes `&AudioBuffer`; all samples **must** be normalized to `[-1.0, 1.0]`. Any sample with `abs() > 1.0` or containing `NaN`/`Inf` is an `InvalidAudio` error.
 - **Normalization contract**: `audio_ingestion` is responsible for delivering normalized `f32` samples via symphonia's built-in PCM conversion. `analysis` enforces the contract but does not re-normalize.
-- Computes **Peak dBFS**: `20.0 * log10(max_amplitude.max(f32::MIN_POSITIVE))` where `max_amplitude = samples.iter().map(|s| s.abs()).fold(0f32, f32::max)`. The `f32::MIN_POSITIVE` clamp prevents `log10(0.0)` from producing `-inf` on silent audio.
-- Computes **RMS dBFS**: computed across **all samples in the flattened interleaved buffer** (no per-channel weighting). `rms = sqrt(sum(s²) / n)`, then `20.0 * log10(rms.max(f32::MIN_POSITIVE))`. Channel weighting is deferred to Phase 3.
+- Computes **Peak dBFS**: `max_amplitude = samples.iter().map(|s| s.abs()).fold(0f32, f32::max)`. If `max_amplitude == 0.0` (silent buffer), Peak dBFS is `SILENCE_FLOOR_DBFS = -120.0`. Otherwise `20.0 * max_amplitude.log10()`. **Do not use `f32::MIN_POSITIVE` as the clamp** — it maps silence to ≈ −758 dBFS, which is acoustically meaningless and will corrupt crest factor and future classification heuristics. The −120 dBFS floor matches DAW convention (industry range: −120 to −144 dBFS).
+- Computes **RMS dBFS**: computed across **all samples in the flattened interleaved buffer** (no per-channel weighting). `rms = sqrt(sum(s²) / n)`. If `rms == 0.0`, RMS dBFS is `SILENCE_FLOOR_DBFS`. Otherwise `20.0 * rms.log10()`. **Phase 2 RMS is energy-based, not perceptual, and is not intended to match LUFS behavior.** Stereo panning energy may read slightly higher than mono-equivalent. Per-channel weighting and perceptual RMS are deferred to Phase 3.
 - Computes **Crest Factor**: `peak_dbfs − rms_dbfs` (log-domain dB difference, not linear ratio).
-- Sets `integrated_lufs = MeasurementValue { value: None, quality: Placeholder }`.
+- Sets `integrated_lufs = MeasurementValue { value: None, quality: Placeholder }`. **`integrated_lufs.value` MUST NOT be used in any gain calculation in Phase 2.** It is present for struct completeness only. Consumers must check `quality` before using `value`.
 - Errors: `InvalidAudio` (empty buffer, NaN/Inf samples, samples outside `[-1.0, 1.0]`), `AnalysisFailure`
 
 **`gain_decision`**
@@ -239,7 +239,7 @@ pub fn recommend(
 - `gain_db = target_db − measured_db`
 - Produces one `GainRegion` covering `0.0` to `duration_secs` with `region_type: RegionType::Stable`
 - `confidence: 1.0` (whole-file measurement is always high confidence)
-- `reason`: human-readable description string, e.g. `"Peak −12 dBFS target"`
+- `reason`: purely descriptive string, e.g. `"Applied target of −12 dBFS using Peak measurement"`. **Never encode preset identity in the reason string** — `PresetId` carries identity; `reason` carries description. These must not duplicate each other.
 - Sets `preset_used: Some(preset_id)` — structured `PresetId`, not a string
 
 **`gain-api`** — orchestrates both steps, owns all public types, re-exports `GainError`.
@@ -271,7 +271,7 @@ All existing functions (`gain_stage_analyze`, `gain_stage_free_map`, `gain_stage
 /* File-path entry point for standalone and integration testing */
 GainStageMap* gain_stage_analyze_file(
     const char* path,
-    uint8_t     preset   /* see GAIN_STAGE_PRESET_* constants */
+    uint8_t     preset   /* see GAIN_STAGE_PRESET_* constants below */
 );
 
 /* Error introspection — call immediately after a NULL return */
@@ -279,7 +279,21 @@ uint8_t     gain_stage_last_error_code(void);
 const char* gain_stage_last_error_message(void);
 ```
 
-Error code mapping:
+**Preset `uint8` mapping** (must be defined in the C header as `GAIN_STAGE_PRESET_*` constants):
+
+| Constant | Value | `PresetId` |
+|---|---|---|
+| `GAIN_STAGE_PRESET_MIX_PREP_CONSERVATIVE` | `0` | `MixPrepConservative` |
+| `GAIN_STAGE_PRESET_MIX_PREP_STANDARD` | `1` | `MixPrepStandard` |
+| `GAIN_STAGE_PRESET_MIX_PREP_AGGRESSIVE` | `2` | `MixPrepAggressive` |
+| `GAIN_STAGE_PRESET_ANALOG_CONSOLE` | `3` | `AnalogConsole` |
+| `GAIN_STAGE_PRESET_ANALOG_CONSOLE_HOT` | `4` | `AnalogConsoleHot` |
+| `GAIN_STAGE_PRESET_DIALOGUE_PREP` | `5` | `DialoguePrep` |
+| Any other value | — | → `InternalError { details: "unknown preset code N" }`, returns NULL |
+
+`Custom` preset is not exposed via the FFI in Phase 2 — it requires additional parameters (measure type + target dB) with no defined ABI yet. This is deferred to Phase 4.
+
+**Error code mapping:**
 | Code | Variant |
 |------|---------|
 | 1 | `FileNotFound` |
@@ -358,3 +372,13 @@ Real audio fixtures (royalty-free, known-loudness files) are deferred to Phase 3
 - The `ffi_guard` catch_unwind wrapper — already in place from Phase 1
 - `gain-standalone` Tauri command signatures — updated internally to call the two-step API but external command names stay the same
 - `GAIN_MAP_SCHEMA_VERSION` constant — stays at 1 (the data model version has not changed)
+
+---
+
+## Future Watch Items (not Phase 2 scope)
+
+**`gain_map` scope creep:** Phase 2 adds `Measurements`, `MeasurementValue`, `MeasurementQuality`, and `PresetId` to `gain_map`. If Phase 3 continues adding types here, consider splitting into `gain_types` (pure DSP output types) and `gain_map` (recommendation structures). Not necessary now.
+
+**`gain_decision` coupling:** `gain_decision → gain_map` is acceptable for Phase 2. If a future context needs the decision math without the data model (e.g. a WASM module or server pipeline), this dependency may need to be broken by introducing a thin interface layer.
+
+**FFI `Custom` preset:** Deferred in Phase 2. When exposed, will require a new function signature rather than overloading the `uint8` preset parameter — plan the ABI extension before Phase 4 FFI work begins.
