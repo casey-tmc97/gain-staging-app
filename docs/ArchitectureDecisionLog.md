@@ -92,7 +92,51 @@ Studio One, Reaper with ARA extension).
 
 ---
 
-### ADR-005: `gain-api` as sole public surface of `gain-core`
+### ADR-005: Recommendation-first workflow
+
+**Date:** 2026-06-23
+**Status:** Accepted
+
+**Context:** Gain staging tools that modify audio automatically create trust
+problems: engineers cannot tell what changed, cannot revert selectively, and
+cannot apply professional judgment before committing. Automatic gain
+application is a destructive operation that bypasses human decision-making.
+
+**Decision:** The engine never modifies audio. It produces recommendations
+only. All gain adjustments require explicit user action. The
+`GainRecommendationMap` is a read-only output; no write-back path exists
+in the core engine.
+
+**Consequences:** The core engine has no "apply" function. Consumers
+(standalone app, ARA plugin) are responsible for presenting recommendations
+and gating any application behind user confirmation. This eliminates an
+entire class of data-loss bugs.
+
+---
+
+### ADR-006: Gain Map schema versioning
+
+**Date:** 2026-06-23
+**Status:** Accepted
+
+**Context:** The `GainRecommendationMap` structure will evolve as DSP
+analysis is added in later phases. Without a version field, consumers
+cannot detect stale or incompatible map data, and serialized maps have
+no migration path.
+
+**Decision:** Every `GainRecommendationMap` carries a `version: u32` field.
+The current schema version is defined as `GAIN_MAP_SCHEMA_VERSION = 1` in
+`gain_map` and re-exported through `gain-api`. The `Default` impl always
+stamps the current version. Consumers must reject maps with an unrecognized
+version rather than silently misinterpreting them.
+
+**Consequences:** Adding fields to `GainRecommendationMap` requires bumping
+`GAIN_MAP_SCHEMA_VERSION`. Deserialization code must check the version field
+before interpreting the rest of the struct.
+
+---
+
+### ADR-007: `gain-api` as sole public surface of `gain-core`
 
 **Date:** 2026-06-23
 **Status:** Accepted

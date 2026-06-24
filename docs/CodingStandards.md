@@ -33,7 +33,7 @@
 - The C header (`gain_stage_ffi.h`) is the authoritative FFI contract;
   Rust and C++ implementations must match it exactly
 
-## Public API Boundary (ADR-005)
+## Public API Boundary (ADR-007)
 
 - `gain-standalone`, `gain-ara`, and any future SDK may ONLY import `gain-api`
 - Direct imports of `segmentation`, `analysis`, `classification`,
