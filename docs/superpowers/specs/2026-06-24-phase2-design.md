@@ -77,7 +77,7 @@ Named struct variants are used throughout for self-documentation, easier seriali
 
 ### Measurement types
 
-Defined in the `analysis` crate; re-exported by `gain-api` as public types.
+Defined in `gain_map` (the shared types crate), re-exported by `gain-api`. Placing them in `gain_map` — rather than in `analysis` — lets `gain_decision` depend only on `gain_map` and eliminates the diamond dependency where both `gain-api` and `gain_decision` would otherwise import from `analysis`.
 
 ```rust
 pub enum MeasurementQuality {
@@ -87,19 +87,23 @@ pub enum MeasurementQuality {
 }
 
 pub struct MeasurementValue {
-    pub value: f32,
+    pub value: Option<f32>,   // None when quality is Placeholder
     pub quality: MeasurementQuality,
 }
 
 pub struct Measurements {
     pub peak_dbfs: f32,                      // Verified in Phase 2
     pub rms_dbfs: f32,                       // Verified in Phase 2
-    pub crest_factor_db: f32,                // peak_dbfs − rms_dbfs; Verified in Phase 2
-    pub integrated_lufs: MeasurementValue,   // Placeholder in Phase 2 (value = 0.0)
+    pub crest_factor_db: f32,                // log-domain dB difference (peak_dbfs − rms_dbfs); Verified in Phase 2
+    pub integrated_lufs: MeasurementValue,   // Placeholder in Phase 2: { value: None, quality: Placeholder }
 }
 ```
 
-LUFS is always present in the struct so callers can display it and query its quality. It is never approximated — `quality: Placeholder` signals "not yet computed" explicitly.
+`value: Option<f32>` rather than a bare `f32` makes misuse a compile error — UI code cannot accidentally render a placeholder as a number without explicitly handling `None`. `quality: Placeholder` always coincides with `value: None`; `Estimated` and `Verified` always coincide with `value: Some(f32)`.
+
+Crest factor is the **log-domain dB difference** between peak and RMS, not the linear amplitude ratio. This is the correct representation for gain staging UI and is unambiguous for future classification heuristics.
+
+LUFS is always present in the struct so callers can display its quality state. It is never approximated — shipping a fake value and labelling it `Estimated` would mislead users comparing against DAW meters.
 
 ### Metadata and analysis result
 
@@ -160,17 +164,28 @@ pub fn generate_recommendation(
 
 ### Updated `GainRecommendationMap`
 
-`preset_used: Option<String>` is added to `GainRecommendationMap` in `gain_map`:
+`preset_used: Option<PresetId>` is added to `GainRecommendationMap` in `gain_map`. A structured enum is used instead of a string so that Phase 3 provenance tracking, serialization, and match exhaustiveness are all type-safe. `PresetId` is also defined in `gain_map`.
 
 ```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresetId {
+    MixPrepConservative,
+    MixPrepStandard,
+    MixPrepAggressive,
+    AnalogConsole,
+    AnalogConsoleHot,
+    DialoguePrep,
+    Custom,
+}
+
 pub struct GainRecommendationMap {
     pub version: u32,
-    pub preset_used: Option<String>,   // e.g. "MixPrepStandard"
+    pub preset_used: Option<PresetId>,
     pub regions: Vec<GainRegion>,
 }
 ```
 
-`Default` still produces `version: 1, preset_used: None, regions: vec![]`.
+`Default` still produces `version: 1, preset_used: None, regions: vec![]`. The `reason` string on each `GainRegion` carries human-readable description; `preset_used` carries structured identity.
 
 ---
 
@@ -180,14 +195,16 @@ pub struct GainRecommendationMap {
 
 ```
 gain-error       (no deps)
-gain_map         (no deps)
+gain_map         (no deps) ← holds GainRegion, GainRecommendationMap, Measurements, PresetId, MeasurementValue
 audio_ingestion  → gain-error + [symphonia]
-analysis         → audio_ingestion + gain-error
-gain_decision    → analysis + gain_map + gain-error
+analysis         → gain_map + audio_ingestion + gain-error
+gain_decision    → gain_map + gain-error
 gain-api         → audio_ingestion + analysis + gain_decision + gain_map + gain-error
 ffi              → gain-api
 gain-standalone  → gain-api
 ```
+
+`gain_decision` depends only on `gain_map` and `gain-error` — it never imports from `analysis`. This eliminates the diamond dependency and keeps `gain_decision` reusable independently of the audio decoding stack (e.g. for future batch or server contexts that supply pre-computed `Measurements`).
 
 `segmentation` and `classification` are unchanged stubs; they are not in the Phase 2 call path.
 
@@ -199,12 +216,13 @@ gain-standalone  → gain-api
 - Errors: `FileNotFound`, `UnsupportedFormat`, `DecodeFailure`
 
 **`analysis`**
-- Takes `&AudioBuffer`
-- Computes Peak dBFS: `20 * log10(samples.iter().map(|s| s.abs()).fold(0f32, f32::max))`
-- Computes RMS dBFS: `20 * log10(sqrt(sum(s²) / n))`
-- Computes Crest Factor: `peak_dbfs − rms_dbfs`
-- Sets `integrated_lufs = MeasurementValue { value: 0.0, quality: Placeholder }`
-- Errors: `InvalidAudio` (empty buffer, zero-length, NaN samples), `AnalysisFailure`
+- Takes `&AudioBuffer`; all samples **must** be normalized to `[-1.0, 1.0]`. Any sample with `abs() > 1.0` or containing `NaN`/`Inf` is an `InvalidAudio` error.
+- **Normalization contract**: `audio_ingestion` is responsible for delivering normalized `f32` samples via symphonia's built-in PCM conversion. `analysis` enforces the contract but does not re-normalize.
+- Computes **Peak dBFS**: `20.0 * log10(max_amplitude.max(f32::MIN_POSITIVE))` where `max_amplitude = samples.iter().map(|s| s.abs()).fold(0f32, f32::max)`. The `f32::MIN_POSITIVE` clamp prevents `log10(0.0)` from producing `-inf` on silent audio.
+- Computes **RMS dBFS**: computed across **all samples in the flattened interleaved buffer** (no per-channel weighting). `rms = sqrt(sum(s²) / n)`, then `20.0 * log10(rms.max(f32::MIN_POSITIVE))`. Channel weighting is deferred to Phase 3.
+- Computes **Crest Factor**: `peak_dbfs − rms_dbfs` (log-domain dB difference, not linear ratio).
+- Sets `integrated_lufs = MeasurementValue { value: None, quality: Placeholder }`.
+- Errors: `InvalidAudio` (empty buffer, NaN/Inf samples, samples outside `[-1.0, 1.0]`), `AnalysisFailure`
 
 **`gain_decision`**
 
@@ -221,8 +239,8 @@ pub fn recommend(
 - `gain_db = target_db − measured_db`
 - Produces one `GainRegion` covering `0.0` to `duration_secs` with `region_type: RegionType::Stable`
 - `confidence: 1.0` (whole-file measurement is always high confidence)
-- `reason`: human-readable string, e.g. `"Peak −12 dBFS target (MixPrepStandard)"`
-- Sets `preset_used: Some(preset_label.to_string())`
+- `reason`: human-readable description string, e.g. `"Peak −12 dBFS target"`
+- Sets `preset_used: Some(preset_id)` — structured `PresetId`, not a string
 
 **`gain-api`** — orchestrates both steps, owns all public types, re-exports `GainError`.
 
@@ -236,7 +254,7 @@ Every `GainRecommendationMap` produced in Phase 2 has exactly these properties:
 - `regions[0].confidence == 1.0`
 - `regions[0].start_time == 0.0`
 - `regions[0].end_time == metadata.duration_secs`
-- `preset_used == Some("PresetName")`
+- `preset_used == Some(PresetId::…)`
 
 This is by design. Multi-region output requires segmentation, which is Phase 3.
 
@@ -273,6 +291,8 @@ Error code mapping:
 
 `gain_stage_last_error_message()` returns a pointer to a static thread-local buffer valid until the next FFI call on the same thread.
 
+**Concurrency limitation:** The thread-local error buffer is **not safe for concurrent cross-thread usage**. DAW hosts that call FFI functions from multiple threads simultaneously (common in ARA hosts with parallel audio source processing) must serialize calls or maintain per-thread error state. This is acceptable for Phase 2 (standalone app is single-threaded at the FFI boundary) but must be addressed before ARA integration in Phase 4.
+
 ### Deferred to Phase 4
 A C-ABI `AnalysisResult` struct and two-step `gain_stage_generate_recommendation()` — not needed until the ARA plugin requires the split.
 
@@ -307,7 +327,7 @@ All measurement math uses `std`. No FFT library is needed for Peak/RMS.
 - Constant 1.0 samples → `peak_dbfs = 0.0`, `rms_dbfs = 0.0`
 - Constant 0.5 samples → `peak_dbfs ≈ −6.02`, `rms_dbfs ≈ −6.02`
 - Crest Factor for a sine wave: `peak ≈ 0.0`, `rms ≈ −3.01`, crest ≈ 3.01
-- Every test asserts `integrated_lufs.quality == MeasurementQuality::Placeholder`
+- Every test asserts `integrated_lufs.quality == MeasurementQuality::Placeholder` and `integrated_lufs.value == None`
 - Gain math: known peak −6 dBFS + MixPrepStandard (target −12) → `gain_db = −6.0`
 
 ### Tier 2 — File I/O (generated in test setup)
@@ -333,7 +353,7 @@ Real audio fixtures (royalty-free, known-loudness files) are deferred to Phase 3
 
 ## What Does Not Change
 
-- `gain_map` types (`GainRegion`, `RegionType`) — only `GainRecommendationMap` gets `preset_used`
+- `gain_map` types (`GainRegion`, `RegionType`) — `GainRecommendationMap` gets `preset_used: Option<PresetId>`; new types `Measurements`, `MeasurementValue`, `MeasurementQuality`, and `PresetId` are added to `gain_map`
 - The `RegionType` enum — `Stable` is used exclusively in Phase 2 output
 - The `ffi_guard` catch_unwind wrapper — already in place from Phase 1
 - `gain-standalone` Tauri command signatures — updated internally to call the two-step API but external command names stay the same
