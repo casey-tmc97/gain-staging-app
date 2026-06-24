@@ -9,4 +9,5 @@ members = [
     "crates/gain_map",
     "crates/gain-api",
     "crates/ffi",
+    "crates/gain-error",
 ]
