@@ -37,7 +37,8 @@ pub extern "C" fn gain_stage_free_map(map: *mut GainStageMap) {
         return;
     }
     // SAFETY: map was created by Box::into_raw in gain_stage_analyze,
-    // and this function is only called once per map (caller contract).
+    // was returned by gain_stage_analyze, and this function is only
+    // called once per map (caller contract).
     unsafe { drop(Box::from_raw(map)) };
 }
 
@@ -48,6 +49,7 @@ pub extern "C" fn gain_stage_map_region_count(map: *const GainStageMap) -> usize
     if map.is_null() {
         return 0;
     }
+    // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
     // SAFETY: map is non-null and was created by gain_stage_analyze;
     // we hold a shared reference for the duration of this call.
     unsafe { (*map).0.regions.len() }
@@ -73,6 +75,7 @@ pub extern "C" fn gain_stage_map_get_region(
         return zeroed;
     }
 
+    // Caller guarantees: map is non-null and was returned by gain_stage_analyze.
     // SAFETY: map is non-null and was created by gain_stage_analyze;
     // we hold a shared reference for the duration of this call.
     let regions = unsafe { &(*map).0.regions };
@@ -109,33 +112,27 @@ mod tests {
     #[test]
     fn analyze_returns_non_null_map() {
         let samples: Vec<f32> = vec![0.0f32; 1024];
-        let map = unsafe {
-            gain_stage_analyze(samples.as_ptr(), samples.len(), 44100)
-        };
+        let map = gain_stage_analyze(samples.as_ptr(), samples.len(), 44100);
         assert!(!map.is_null());
-        unsafe { gain_stage_free_map(map) };
+        gain_stage_free_map(map);
     }
 
     #[test]
     fn empty_audio_produces_zero_regions() {
         let samples: Vec<f32> = vec![0.0f32; 1024];
-        let map = unsafe {
-            gain_stage_analyze(samples.as_ptr(), samples.len(), 44100)
-        };
+        let map = gain_stage_analyze(samples.as_ptr(), samples.len(), 44100);
         assert!(!map.is_null());
-        let count = unsafe { gain_stage_map_region_count(map) };
+        let count = gain_stage_map_region_count(map);
         assert_eq!(count, 0);
-        unsafe { gain_stage_free_map(map) };
+        gain_stage_free_map(map);
     }
 
     #[test]
     fn get_region_on_empty_map_returns_zeroed() {
         let samples: Vec<f32> = vec![0.0f32; 1024];
-        let map = unsafe {
-            gain_stage_analyze(samples.as_ptr(), samples.len(), 44100)
-        };
-        let region = unsafe { gain_stage_map_get_region(map, 0) };
+        let map = gain_stage_analyze(samples.as_ptr(), samples.len(), 44100);
+        let region = gain_stage_map_get_region(map, 0);
         assert_eq!(region.gain_db, 0.0);
-        unsafe { gain_stage_free_map(map) };
+        gain_stage_free_map(map);
     }
 }

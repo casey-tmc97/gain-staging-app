@@ -11,6 +11,14 @@
 
 ## Rust Crate Dependency Graph
 
+Current scaffold wiring (actual Cargo.toml dependencies):
+```
+ffi → gain_map
+gain_decision → gain_map
+audio_ingestion, analysis, segmentation, classification (no inter-crate deps yet)
+```
+
+Target architecture for DSP phase:
 ```
 ffi
  └── gain_decision
