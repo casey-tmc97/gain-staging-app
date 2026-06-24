@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/audio_ingestion",
+    "crates/analysis",
+    "crates/segmentation",
+    "crates/classification",
+    "crates/gain_decision",
+    "crates/gain_map",
+    "crates/ffi",
+]
