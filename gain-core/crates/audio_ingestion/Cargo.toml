@@ -2,3 +2,10 @@
 name = "audio_ingestion"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+gain-error = { path = "../gain-error" }
+symphonia  = { version = "0.5", features = ["wav", "aiff", "pcm"] }
+
+[dev-dependencies]
+tempfile = "3"
