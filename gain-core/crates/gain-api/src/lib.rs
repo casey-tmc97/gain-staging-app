@@ -1,48 +1,67 @@
-pub use gain_map::{GainRecommendationMap, GainRegion, RegionType, GAIN_MAP_SCHEMA_VERSION};
+pub use gain_error::GainError;
+pub use gain_map::{
+    GainRecommendationMap, GainRegion, Measurements, MeasurementQuality, MeasurementValue,
+    PresetId, RegionType, GAIN_MAP_SCHEMA_VERSION,
+};
+pub use audio_ingestion::{AudioBuffer, AudioMetadata, ContainerFormat};
+pub use gain_decision::MeasureType;
 
-#[derive(Debug)]
-pub enum GainError {
-    FileNotFound(String),
-    UnsupportedFormat(String),
-    AnalysisFailed(String),
+pub struct AnalysisResult {
+    pub metadata:     AudioMetadata,
+    pub measurements: Measurements,
 }
 
-impl std::fmt::Display for GainError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GainError::FileNotFound(path)     => write!(f, "file not found: {path}"),
-            GainError::UnsupportedFormat(ext) => write!(f, "unsupported format: {ext}"),
-            GainError::AnalysisFailed(reason) => write!(f, "analysis failed: {reason}"),
-        }
-    }
+pub enum RecommendationPreset {
+    MixPrepConservative,              // Peak -18 dBFS
+    MixPrepStandard,                  // Peak -12 dBFS
+    MixPrepAggressive,                // Peak -6 dBFS
+    AnalogConsole,                    // RMS -18 dBFS
+    AnalogConsoleHot,                 // RMS -14 dBFS
+    DialoguePrep,                     // Peak -10 dBFS
+    Custom { measure: MeasureType, target_db: f32 },
 }
 
-impl std::error::Error for GainError {}
-
-/// Analyze an audio file and return a GainRecommendationMap.
-/// Stub: returns an empty map with version = 1 regardless of input.
-pub fn analyze_file(path: &std::path::Path) -> Result<GainRecommendationMap, GainError> {
-    let _ = path;
-    Ok(GainRecommendationMap::default())
+/// Step 1 of the public API: decode an audio file and measure Peak/RMS/CrestFactor.
+pub fn analyze_file(path: &std::path::Path) -> Result<AnalysisResult, GainError> {
+    let (buf, metadata) = audio_ingestion::load_file(path)?;
+    let measurements = analysis::measure(&buf)?;
+    Ok(AnalysisResult { metadata, measurements })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Step 1 variant: measure raw PCM samples already in memory.
+/// `duration_secs` must reflect the true playback duration of the supplied samples.
+pub fn analyze_pcm(
+    samples: &[f32],
+    sample_rate: u32,
+    channels: u16,
+    duration_secs: f64,
+) -> Result<AnalysisResult, GainError> {
+    let buf = AudioBuffer { samples: samples.to_vec(), sample_rate, channels };
+    let measurements = analysis::measure(&buf)?;
+    let metadata = AudioMetadata { duration_secs, sample_rate, channels, format: ContainerFormat::Wav };
+    Ok(AnalysisResult { metadata, measurements })
+}
 
-    #[test]
-    fn analyze_file_stub_returns_default_map() {
-        let result = analyze_file(std::path::Path::new("/fake/path.wav"));
-        assert!(result.is_ok());
-        let map = result.unwrap();
-        assert_eq!(map.version, 1);
-        assert!(map.regions.is_empty());
-    }
+/// Step 2 of the public API: apply a preset to produce a GainRecommendationMap.
+pub fn generate_recommendation(
+    analysis: &AnalysisResult,
+    preset: RecommendationPreset,
+) -> Result<GainRecommendationMap, GainError> {
+    let (measure, target_db, preset_id) = match preset {
+        RecommendationPreset::MixPrepConservative => (MeasureType::Peak, -18.0f32, PresetId::MixPrepConservative),
+        RecommendationPreset::MixPrepStandard     => (MeasureType::Peak, -12.0,    PresetId::MixPrepStandard),
+        RecommendationPreset::MixPrepAggressive   => (MeasureType::Peak,  -6.0,    PresetId::MixPrepAggressive),
+        RecommendationPreset::AnalogConsole        => (MeasureType::Rms,  -18.0,   PresetId::AnalogConsole),
+        RecommendationPreset::AnalogConsoleHot     => (MeasureType::Rms,  -14.0,   PresetId::AnalogConsoleHot),
+        RecommendationPreset::DialoguePrep         => (MeasureType::Peak, -10.0,   PresetId::DialoguePrep),
+        RecommendationPreset::Custom { measure, target_db } => (measure, target_db, PresetId::Custom),
+    };
 
-    #[test]
-    fn gain_error_variants_exist() {
-        let _ = GainError::FileNotFound("x".to_string());
-        let _ = GainError::UnsupportedFormat("x".to_string());
-        let _ = GainError::AnalysisFailed("x".to_string());
-    }
+    gain_decision::recommend(
+        &analysis.measurements,
+        measure,
+        target_db,
+        analysis.metadata.duration_secs,
+        preset_id,
+    )
 }
