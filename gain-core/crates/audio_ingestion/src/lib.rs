@@ -18,6 +18,7 @@ pub enum ContainerFormat {
     Aiff,
 }
 
+#[derive(Debug)]
 pub struct AudioMetadata {
     pub duration_secs: f64,
     pub sample_rate: u32,

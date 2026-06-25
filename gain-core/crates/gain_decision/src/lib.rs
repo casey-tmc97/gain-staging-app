@@ -1,6 +1,6 @@
 use gain_error::GainError;
 use gain_map::{
-    GainRecommendationMap, GainRegion, Measurements, MeasurementQuality, MeasurementValue,
+    GainRecommendationMap, GainRegion, Measurements,
     PresetId, RegionType, GAIN_MAP_SCHEMA_VERSION,
 };
 
@@ -39,17 +39,17 @@ pub fn recommend(
     })
 }
 
-fn placeholder_measurements(peak: f32, rms: f32) -> Measurements {
-    Measurements {
-        peak_dbfs: peak, rms_dbfs: rms, crest_factor_db: peak - rms,
-        integrated_lufs: MeasurementValue { value: None, quality: MeasurementQuality::Placeholder },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gain_map::RegionType;
+    use gain_map::{RegionType, MeasurementQuality, MeasurementValue};
+
+    fn placeholder_measurements(peak: f32, rms: f32) -> Measurements {
+        Measurements {
+            peak_dbfs: peak, rms_dbfs: rms, crest_factor_db: peak - rms,
+            integrated_lufs: MeasurementValue { value: None, quality: MeasurementQuality::Placeholder },
+        }
+    }
 
     #[test]
     fn peak_target_minus_12_with_peak_minus_6_gives_minus_6_gain() {

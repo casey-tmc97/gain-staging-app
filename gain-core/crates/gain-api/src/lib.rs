@@ -6,11 +6,13 @@ pub use gain_map::{
 pub use audio_ingestion::{AudioBuffer, AudioMetadata, ContainerFormat};
 pub use gain_decision::MeasureType;
 
+#[derive(Debug)]
 pub struct AnalysisResult {
     pub metadata:     AudioMetadata,
     pub measurements: Measurements,
 }
 
+#[derive(Debug)]
 pub enum RecommendationPreset {
     MixPrepConservative,              // Peak -18 dBFS
     MixPrepStandard,                  // Peak -12 dBFS
