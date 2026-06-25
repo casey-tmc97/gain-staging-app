@@ -1,7 +1,8 @@
 #[derive(serde::Serialize)]
 pub struct GainMapDto {
-    pub version: u32,
-    pub regions: Vec<GainRegionDto>,
+    pub version:     u32,
+    pub preset_used: Option<String>,
+    pub regions:    Vec<GainRegionDto>,
 }
 
 #[derive(serde::Serialize)]
