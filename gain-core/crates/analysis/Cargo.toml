@@ -2,3 +2,8 @@
 name = "analysis"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+audio_ingestion = { path = "../audio_ingestion" }
+gain_map        = { path = "../gain_map" }
+gain-error      = { path = "../gain-error" }
