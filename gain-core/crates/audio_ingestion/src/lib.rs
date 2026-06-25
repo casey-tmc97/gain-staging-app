@@ -30,29 +30,14 @@ pub fn load_file(path: &std::path::Path) -> Result<(AudioBuffer, AudioMetadata),
         return Err(GainError::FileNotFound { path: path.to_string_lossy().into_owned() });
     }
 
-    // Detect container format: first try extension, then sniff magic bytes.
+    // Detect container format by file extension.
     let ext = path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
     let container = match ext.as_deref() {
         Some("wav")                => ContainerFormat::Wav,
         Some("aif") | Some("aiff") => ContainerFormat::Aiff,
-        _ => {
-            // No recognized extension — sniff the first 4 bytes for RIFF / FORM magic.
-            let mut magic = [0u8; 4];
-            let mut peek = std::fs::File::open(path)
-                .map_err(|e| GainError::DecodeFailure { details: e.to_string() })?;
-            use std::io::Read;
-            peek.read_exact(&mut magic)
-                .map_err(|_| GainError::UnsupportedFormat {
-                    format: ext.as_deref().unwrap_or("(no extension)").to_string(),
-                })?;
-            match &magic {
-                b"RIFF"             => ContainerFormat::Wav,
-                b"FORM"             => ContainerFormat::Aiff,
-                _ => return Err(GainError::UnsupportedFormat {
-                    format: ext.as_deref().unwrap_or("(no extension)").to_string(),
-                }),
-            }
-        }
+        other => return Err(GainError::UnsupportedFormat {
+            format: other.unwrap_or("(no extension)").to_string(),
+        }),
     };
 
     let file = std::fs::File::open(path)
@@ -173,7 +158,7 @@ mod tests {
     fn load_wav_returns_samples_and_metadata() {
         let samples_i16: Vec<i16> = vec![16383; 100]; // ≈ 0.5 amplitude
         let bytes = make_wav(&samples_i16, 44100);
-        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let mut f = tempfile::NamedTempFile::with_suffix(".wav").unwrap();
         f.write_all(&bytes).unwrap();
         let (buf, meta) = load_file(f.path()).unwrap();
         assert_eq!(meta.sample_rate, 44100);
@@ -188,7 +173,7 @@ mod tests {
     fn load_aiff_returns_samples_and_metadata() {
         let samples_i16: Vec<i16> = vec![16383; 50];
         let bytes = make_aiff(&samples_i16, 44100);
-        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let mut f = tempfile::NamedTempFile::with_suffix(".aiff").unwrap();
         f.write_all(&bytes).unwrap();
         let (buf, meta) = load_file(f.path()).unwrap();
         assert_eq!(meta.sample_rate, 44100);
