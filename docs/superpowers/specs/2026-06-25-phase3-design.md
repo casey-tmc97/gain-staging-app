@@ -73,6 +73,25 @@ The boundary between the analysis pipeline and the decision engine is `RegionAna
 
 ## gain_map Type Evolution
 
+### MeasurementValue and MeasurementQuality (carried from Phase 2, unchanged)
+
+`MeasurementValue` and `MeasurementQuality` are defined in the Phase 2 spec and implemented in `gain_map`. They are reproduced here for completeness:
+
+```rust
+pub struct MeasurementValue {
+    pub value: Option<f32>,       // None when quality is Placeholder
+    pub quality: MeasurementQuality,
+}
+
+pub enum MeasurementQuality {
+    Placeholder,  // not yet computed
+    Estimated,    // approximated, not spec-compliant
+    Verified,     // spec-compliant implementation
+}
+```
+
+`value: None` always coincides with `Placeholder`; `value: Some(f32)` always coincides with `Estimated` or `Verified`. These invariants are unchanged in Phase 3. The new Phase 3 fields (`short_term_lufs_peak`, `momentary_lufs_peak`, `true_peak_dbtp`) all report `Verified` when successfully computed.
+
 ### Measurements (extended)
 
 ```rust
@@ -700,6 +719,8 @@ All: WAV, 44100 Hz, 32-bit float, mono.
 
 Use `ebur128` (wrapping libebur128) rather than a from-scratch Rust BS.1770-4 implementation. Rationale: libebur128 is the reference implementation; using it eliminates correctness risk and months of filter-design validation work. Trade-off: adds a C dependency that must be statically linked in the ARA plugin build (Phase 4 concern).
 
+**Containment constraint (enforced now, critical for Phase 4):** libebur128 types, symbols, and header includes must not appear on any public surface of `gain-api` or cross the FFI boundary. `ebur128` is an implementation detail of the `analysis` crate only. `gain-api` exposes `Measurements` (pure Rust data); it must never expose or re-export any `ebur128::*` type. ARA plugins are C++ and tend to inherit C dependency headers transitively — strict containment prevents symbol conflicts and simplifies the Phase 4 build.
+
 **ADR-009: gain_decision remains data-only through Phase 3**
 
 `gain_decision` depends only on `gain_map + gain-error`. The pipeline boundary between the analysis stack and the decision engine is `RegionAnalysis`. Rationale: preserves `gain_decision` reusability for ARA batch contexts and future server deployments that supply pre-computed `RegionAnalysis` data. Resolves the Phase 2 future watch item on structural scaling pressure.
@@ -735,3 +756,5 @@ The public API doesn't change; internal mutability and Phase 4 override semantic
 **Album anchor Phase 4 extension:** `AlbumAnchorMethod::ReferenceTrack` is deferred. When added, extend via a struct-based variant rather than expanding the byte-flag space — the same lesson as the FFI `Custom` preset deferral.
 
 **Album analysis scalability:** `analyze_album_files` is synchronous and sequential. For large catalogs, rayon parallelism at the `gain-api` level is the natural extension point. Phase 4.
+
+**Silence `confidence = 0.0` UI semantics:** The current spec uses `confidence = 0.0` as the canonical "no recommendation applicable" signal for silence regions. A downstream consumer that displays confidence as a reliability indicator (not a filter threshold) will show silence as "failed analysis." If this causes UI confusion, the correct fix is adding `is_applicable: bool` to `RegionDecision` rather than repurposing the confidence field further. Phase 4 UX work should resolve this.
