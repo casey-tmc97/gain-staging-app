@@ -135,6 +135,27 @@ pub enum RegionType {
 
 `Stable` is retained as the designated output for the Phase 2 compat path in `generate_recommendation()`, where segmentation has not run and the file is treated as a single region. `RegionType` maps directly from `ContentClass` for all classified regions. For the Phase 2 compat path (no classification): `region_type = RegionType::Stable`, `content_class = ContentClass::Unknown`.
 
+**Enforcement constraint:** `RegionType` must never be constructed manually outside of two locations: (1) `impl From<ContentClass> for RegionType` in `gain_map`, which is the sole mapping function, and (2) the Phase 2 compat path in `gain-api` which sets `RegionType::Stable` explicitly. Anywhere else in the codebase, `RegionType` is derived from `ContentClass` via `From`. This prevents the two enums from drifting — `ContentClass` is the semantic source of truth; `RegionType` is the derived external label.
+
+The `From` implementation:
+```rust
+impl From<ContentClass> for RegionType {
+    fn from(class: ContentClass) -> Self {
+        match class {
+            ContentClass::Silence    => RegionType::Silence,
+            ContentClass::Dialogue   => RegionType::Dialogue,
+            ContentClass::Music      => RegionType::Music,
+            ContentClass::Ambience   => RegionType::Ambience,
+            ContentClass::Percussive => RegionType::Percussive,
+            ContentClass::Mixed      => RegionType::Mixed,
+            ContentClass::Unknown    => RegionType::Unknown,
+        }
+    }
+}
+```
+
+`Stable` has no `ContentClass` counterpart by design — it is only reachable via the explicit Phase 2 compat assignment.
+
 ### RegionAnalysis (updated)
 
 ```rust
@@ -244,15 +265,10 @@ pub enum GainError {
     InvalidAudio { details: String },
     AnalysisFailure { details: String },
     InternalError { details: String },
-    // Phase 3 addition
-    BatchPartialFailure {
-        successes: Vec<usize>,
-        failures: Vec<(usize, Box<GainError>)>,  // Box required: recursive enum variant
-    },
 }
 ```
 
-`BatchPartialFailure` is used by `analyze_album_files` to report per-file errors without aborting the batch. `usize` indices reference positions in the original `paths` slice.
+No new `GainError` variants are added in Phase 3. Per-file batch errors are surfaced via `Vec<Result<>>` (see album consistency API).
 
 ### PresetId and RecommendationPreset (Phase 3 additions)
 
@@ -369,6 +385,8 @@ const MIN_SEGMENT_SECS: f64          = 0.500;
 
 `segmentation` does not hold `AudioBuffer` data beyond its local processing scope.
 
+**Known fragility:** Fixed thresholds will produce over-segmentation on heavily compressed material (crest factor < 3 dB, where the 6 dB change threshold is never exceeded) and under-segmentation on cinematic audio (very soft dialogue embedded in ambient bed). Phase 3 accepts this limitation. Phase 4 will add content-aware threshold adaptation. Tier 5 fuzz tests must cover these cases and assert that the output is valid (≥ 1 segment, no panic) even if boundary placement is suboptimal.
+
 ---
 
 ## Crate: `classification` (activated)
@@ -420,7 +438,9 @@ The Phase 2 `recommend(measurements, ...)` function is removed. This is a breaki
 
 ### Logic per region
 
-- `ContentClass::Silence` → `gain_db = 0.0`, `confidence = 1.0`, `reason = "Silence region — no gain adjustment"`
+- `ContentClass::Silence` → `gain_db = 0.0`, `confidence = 0.0`, `reason = "Silence region — no gain recommendation applies"`
+
+  `confidence = 0.0` is the canonical signal for "no recommendation applicable." Consumers must check `confidence` before treating `gain_db` as actionable. `confidence = 1.0` for silence would be misleading — high confidence in what? A downstream consumer that filters recommendations by confidence (e.g., a UI threshold slider) will correctly exclude silence regions without needing to inspect `content_class`.
 - All other classes → pick measurement by `MeasureType`:
   - `Peak` → `peak_dbfs`
   - `Rms` → `rms_dbfs`
@@ -468,10 +488,11 @@ pub fn generate_region_recommendations(
 ### Album consistency API (new)
 
 ```rust
-/// Analyze all files. Per-file errors do not abort the batch.
+/// Analyze all files. Returns one Result per path in the same order; per-file errors
+/// do not abort the batch. Callers filter on Ok/Err before passing to compute_album_anchor.
 pub fn analyze_album_files(
     paths: &[&Path],
-) -> Result<Vec<AnalysisResult>, GainError>
+) -> Vec<Result<AnalysisResult, GainError>>
 
 /// Compute LUFS anchor from analysis results.
 /// Tracks with integrated_lufs.quality != Verified are excluded from anchor computation.
@@ -487,7 +508,14 @@ pub fn generate_album_recommendations(
 ) -> Result<Vec<GainRecommendationMap>, GainError>
 ```
 
-`analyze_album_files` returns `GainError::BatchPartialFailure` when one or more files fail. Callers inspect `successes` and `failures` to determine which results are valid before passing to `compute_album_anchor`.
+`analyze_album_files` returns `Vec<Result<AnalysisResult, GainError>>` with one entry per input path, preserving order. There is no outer `Result` — the function itself cannot fail, only individual files can. Callers do:
+```rust
+let all = analyze_album_files(&paths);
+let good: Vec<&AnalysisResult> = all.iter().filter_map(|r| r.as_ref().ok()).collect();
+let bad: Vec<&GainError>       = all.iter().filter_map(|r| r.as_ref().err()).collect();
+```
+
+This is FFI-friendlier than `BatchPartialFailure` (no recursive struct, no index-based error introspection) and caller-side failure handling is idiomatic Rust.
 
 `compute_album_anchor` returns `GainError::AnalysisFailure` if no tracks have verified LUFS. Default anchor method: `AlbumAnchorMethod::MedianLufs`.
 
@@ -506,7 +534,7 @@ All Phase 2 FFI functions remain valid:
 - `gain_stage_map_region_count` (returns `recommendations.len()`)
 - `gain_stage_map_get_region` (C struct fields sourced from `region.analysis.*` and `region.decision.*`)
 - `gain_stage_map_version`
-- `gain_stage_last_error_code` (new code 7: `BatchPartialFailure`)
+- `gain_stage_last_error_code` (codes unchanged from Phase 2)
 - `gain_stage_last_error_message`
 
 ### New in Phase 3
@@ -575,7 +603,7 @@ Phase 3 preset constants (extending Phase 2 `GAIN_STAGE_PRESET_*`):
 | `GAIN_STAGE_PRESET_FILM_DIALOGUE` | 10 | LUFS | −27 |
 | `GAIN_STAGE_PRESET_ALBUM_CONSISTENCY` | 11 | LUFS | anchor |
 
-New error code: `7` → `BatchPartialFailure`.
+No new FFI error codes. Batch errors are surfaced in Rust return types, not the FFI error channel.
 
 ---
 
@@ -606,6 +634,20 @@ True Peak validated against expected ± 0.2 dBTP on known test signals.
 
 `analyze_album_files` → `compute_album_anchor` → `generate_album_recommendations` end-to-end with 3 generated files at known loudness levels. Assert anchor equals median LUFS of inputs. Assert each output `gain_db = anchor.reference_lufs − file.integrated_lufs`.
 
+### Tier 5 — Real-world edge case corpus
+
+Segmentation and ebur128 edge interactions are not caught by synthetic signals. A corpus of adversarial audio cases must be exercised before Phase 3 is considered complete:
+
+- **Clipped audio:** samples at exactly ±1.0 or above (NaN/Inf propagation check)
+- **DC offset:** non-zero mean signal (constant bias shifts RMS without moving peak)
+- **Interleaved silence bursts:** alternating loud/silent 100ms windows (segmentation boundary stress test)
+- **Heavily compressed material:** <3 dB crest factor (classification rule 4/Music boundary case)
+- **Cinematic soft dialogue over ambience:** low RMS dialogue + ambient bed (Dialogue vs Ambience boundary)
+- **Malformed CAF headers:** valid audio data, corrupt chunk headers (symphonia error propagation)
+- **32-bit float with extreme values:** subnormal floats, ±INF samples
+
+These cases are exercised as unit tests with programmatically generated inputs, not committed binary fixtures. The `segmentation` and `classification` crates must handle all cases without panicking or returning `InternalError` when the audio is technically valid.
+
 ### test-assets/ (activated)
 
 Required files (generated by `scripts/gen_test_assets.py`; not committed as binaries):
@@ -634,7 +676,7 @@ All: WAV, 44100 Hz, 32-bit float, mono.
 - `ffi_guard` catch_unwind wrapper — unchanged
 - Phase 2 FFI function signatures — unchanged
 - `GAIN_MAP_SCHEMA_VERSION` constant name — unchanged (value bumps to 2)
-- Phase 2 `GainError` variants — unchanged (`BatchPartialFailure` added)
+- `GainError` variants — unchanged from Phase 2 (no new variants added)
 - `MeasurementQuality` enum — unchanged
 - All `// SAFETY:` constraints — unchanged
 - ADR-001 through ADR-007 — unchanged
@@ -666,7 +708,25 @@ Use `ebur128` (wrapping libebur128) rather than a from-scratch Rust BS.1770-4 im
 
 ## Future Watch Items
 
-**`gain_map` growth:** Phase 3 adds `ContentClass`, `RegionDecision`, `RegionAnalysis` (updated), `GainRegion` (repurposed), `AnalysisBundle`, `AlbumAnchor`, `AlbumAnchorMethod` to `gain_map`. A future split into `gain_types` (DSP measurement output) and `gain_map` (recommendation/UI layer) remains on the table. Phase 3 naming is chosen to make this split clean when it becomes necessary.
+**`gain_map` structural split (Phase 4 tipping point):** Phase 3 pushes `gain_map` past the point where it is a clean single-concern crate. It now contains DSP layer types (`Measurements`, `RegionAnalysis`), decision layer types (`RegionDecision`, `GainRegion`, presets), and orchestration types (`AnalysisBundle`, `GainRecommendationMap`). Phase 4 should introduce a formal split into four crates:
+- `gain-dsp` — `Measurements`, `AudioBuffer` abstractions, ebur128 wrappers
+- `gain-analysis` — `RegionAnalysis`, segmentation/classification types
+- `gain-decision` — presets, `RegionDecision`, gain math
+- `gain-protocol` — `GainRecommendationMap`, FFI structs, schema versioning
+
+Phase 3 naming is chosen to make this split clean. No circular dependencies will be created by it.
+
+**`RegionAnalysis` internal split:** Currently `RegionAnalysis` bundles DSP measurements, segmentation timing, classification output, and confidence scoring. For Phase 4 (ARA region editing, user overrides, alternate classifications), consider splitting into:
+```rust
+struct RegionFeatures { measurements, start_time, end_time }
+struct RegionInference { content_class, region_type, classification_confidence }
+pub struct RegionAnalysis { features: RegionFeatures, inference: RegionInference }
+```
+The public API doesn't change; internal mutability and Phase 4 override semantics become cleaner.
+
+**Classification vector (Phase 4):** Phase 3 classification returns a single winning `(ContentClass, f32)`. Borderline audio (e.g., speech over a music bed) will produce `Mixed` or oscillate between `Dialogue` and `Music` depending on subtle mastering differences. Phase 4 should change `classify()` to return `Vec<(ContentClass, f32)>` (per-class scores), stored as `classification_scores` on `RegionAnalysis`. Phase 3 uses only the top result; Phase 4 ML training and UI use the full vector.
+
+**Segmentation adaptivity (Phase 4):** The Phase 3 segmentation constants (−60 dBFS silence threshold, 6 dB change threshold) are fixed. Heavily compressed material, cinematic audio with embedded ambience, and podcasts with music beds will produce over-segmentation or under-segmentation. Phase 4 should adapt segmentation strategy based on file-level content classification: detect the dominant `ContentClass` from a quick whole-file pass first, then apply content-aware thresholds.
 
 **Classification rule maintenance:** Phase 3 thresholds are conservative and well-separated. As real audio fixtures accumulate, rules will need threshold refinement. Rules and documentation (`docs/GainDecisionModel.md`) must be updated together — neither is authoritative without the other.
 
