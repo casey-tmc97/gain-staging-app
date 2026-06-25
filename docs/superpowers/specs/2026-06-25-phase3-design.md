@@ -190,19 +190,67 @@ pub struct RegionAnalysis {
 
 `region_type` and `content_class` coexist: `content_class` is the internal classifier output; `region_type` is the external/FFI-facing label. For classified regions they are redundant — `region_type` is always derivable from `content_class` — but keeping both prevents the `Stable` special case from leaking into `ContentClass`.
 
+**Structural enforcement (stronger than the discipline-based constraint in the previous section):** `RegionAnalysis` has no public constructor. All fields are `pub` for reading; construction is `pub(crate)` within `gain_map`. External crates, including `gain-api`, construct `RegionAnalysis` only through two named factory functions exposed by `gain_map`:
+
+```rust
+impl RegionAnalysis {
+    /// Used by gain-api for classified regions: region_type derived from content_class via From.
+    pub(crate) fn from_classification(
+        start_time: f64,
+        end_time: f64,
+        measurements: Measurements,
+        content_class: ContentClass,
+        classification_confidence: f32,
+    ) -> Self {
+        Self {
+            start_time,
+            end_time,
+            measurements,
+            region_type: RegionType::from(content_class),
+            content_class,
+            classification_confidence,
+        }
+    }
+
+    /// Used exclusively by gain-api for the Phase 2 compat whole-file path.
+    pub(crate) fn whole_file_stable(
+        start_time: f64,
+        end_time: f64,
+        measurements: Measurements,
+    ) -> Self {
+        Self {
+            start_time,
+            end_time,
+            measurements,
+            region_type: RegionType::Stable,
+            content_class: ContentClass::Unknown,
+            classification_confidence: 1.0,
+        }
+    }
+}
+```
+
+`gain_map` re-exports these constructors via `pub use` for `gain-api` only. No other crate can construct a `RegionAnalysis`, so mismatched `(content_class, region_type)` pairs are a compile error, not a discipline concern.
+
 `classification_confidence` carries classifier certainty. Phase 3 deterministic rules produce 1.0 for unambiguous cases and fractional values for borderline cases. The field exists in Phase 3 so future heuristics have a typed slot without a type change.
 
 ### RegionDecision (new)
 
 ```rust
 pub struct RegionDecision {
+    pub is_applicable: bool,    // false = no recommendation applies (silence, error); ignore gain_db
     pub gain_db: f32,
     pub confidence: f32,
     pub reason: String,    // human-readable; never parsed for control flow
 }
 ```
 
-`RegionDecision` is the pure output of `gain_decision`. It carries no analysis provenance. This preserves the Phase 2 design constraint: `gain_decision` operates on measurement data and target math only — it does not carry segmentation or classification state forward into the recommendation.
+`RegionDecision` is the pure output of `gain_decision`. It carries no analysis provenance.
+
+`is_applicable` separates the "recommendation domain" concern from the confidence score. When `false`, `gain_db` must be ignored — the region has no gain recommendation (silence, or future error states). This prevents downstream consumers from interpreting `confidence = 0.0` as "low-quality detection" when the actual meaning is "not a recommendation domain." `confidence` retains its meaning as recommendation certainty when `is_applicable = true`; it is undefined (treat as 0.0) when `is_applicable = false`.
+
+Silence regions: `is_applicable = false`, `gain_db = 0.0`, `confidence = 0.0`, `reason = "Silence region — not a recommendation domain"`.
+All other regions: `is_applicable = true`, `gain_db` and `confidence` per the decision logic below.
 
 ### GainRegion (repurposed)
 
@@ -315,7 +363,13 @@ pub enum PresetId {
 pub const GAIN_MAP_SCHEMA_VERSION: u32 = 2;
 ```
 
-Bumped from 1. Consumers must reject maps where `version != 2`. `GainRecommendationMap::default()` stamps version 2.
+Bumped from 1. `GainRecommendationMap::default()` stamps version 2.
+
+**Version compatibility rule (replaces Phase 2 strict equality):** Consumers must reject maps where `version < 2` (unknown older format). Consumers must accept maps where `version >= 2`, treating unknown future fields as absent or default. Hard rejection on `version != 2` would make Phase 3→3.1 fixes breaking changes for no real safety gain — a reader that understands v2 can safely ignore fields added in v3.
+
+Per-field feature gating: Phase 3 fields (`short_term_lufs_peak`, `momentary_lufs_peak`, `true_peak_dbtp`, `content_class`, `classification_confidence`, `is_applicable`) must be treated as optional by any consumer that reads serialized maps. A missing field defaults to `MeasurementQuality::Placeholder` for `MeasurementValue` fields and to safe zero-values for numeric fields. Consumers must not hard-fail on unexpected fields.
+
+The FFI version accessor `gain_stage_map_version()` continues to return the stamped integer; C callers must check `>= 2` rather than `== 2`.
 
 ---
 
@@ -457,9 +511,8 @@ The Phase 2 `recommend(measurements, ...)` function is removed. This is a breaki
 
 ### Logic per region
 
-- `ContentClass::Silence` → `gain_db = 0.0`, `confidence = 0.0`, `reason = "Silence region — no gain recommendation applies"`
-
-  `confidence = 0.0` is the canonical signal for "no recommendation applicable." Consumers must check `confidence` before treating `gain_db` as actionable. `confidence = 1.0` for silence would be misleading — high confidence in what? A downstream consumer that filters recommendations by confidence (e.g., a UI threshold slider) will correctly exclude silence regions without needing to inspect `content_class`.
+- `ContentClass::Silence` → `is_applicable = false`, `gain_db = 0.0`, `confidence = 0.0`, `reason = "Silence region — not a recommendation domain"`
+- All other classes → `is_applicable = true`, then:
 - All other classes → pick measurement by `MeasureType`:
   - `Peak` → `peak_dbfs`
   - `Rms` → `rms_dbfs`
@@ -580,9 +633,11 @@ typedef struct {
     float   classification_confidence;
     uint8_t region_type;
     uint8_t content_class;
-    const char* reason;   /* static buffer; valid until next FFI call on this thread */
+    uint8_t is_applicable;   /* 0 = no recommendation (silence); 1 = recommendation valid */
 } GainStageRegionV2;
 ```
+
+`reason` is **excluded from the C struct in Phase 3.** The thread-local static string pattern used in Phase 2 for `gain_stage_last_error_message` is unsafe in multithreaded DAW hosts: if two calls interleave on different threads, the string pointer may be silently invalidated or read from the wrong thread's buffer. Extending this pattern to per-region reason strings in Phase 3 would compound the problem. Reason strings are diagnostic information useful at the Rust layer; Phase 4 will introduce proper string ownership semantics (heap-allocated, caller-freed via `gain_stage_free_string()`) when ARA integration requires them across the boundary.
 
 `content_class` byte mapping (add `GAIN_STAGE_CLASS_*` constants to C header):
 
@@ -729,13 +784,15 @@ Use `ebur128` (wrapping libebur128) rather than a from-scratch Rust BS.1770-4 im
 
 ## Future Watch Items
 
-**`gain_map` structural split (Phase 4 tipping point):** Phase 3 pushes `gain_map` past the point where it is a clean single-concern crate. It now contains DSP layer types (`Measurements`, `RegionAnalysis`), decision layer types (`RegionDecision`, `GainRegion`, presets), and orchestration types (`AnalysisBundle`, `GainRecommendationMap`). Phase 4 should introduce a formal split into four crates:
-- `gain-dsp` — `Measurements`, `AudioBuffer` abstractions, ebur128 wrappers
-- `gain-analysis` — `RegionAnalysis`, segmentation/classification types
-- `gain-decision` — presets, `RegionDecision`, gain math
-- `gain-protocol` — `GainRecommendationMap`, FFI structs, schema versioning
+**`gain_map` structural split — not optional cleanup, required before Phase 4 ships:** By Phase 3 end, `gain_map` is acting as DSP domain model, analysis model, decision model, and protocol/FFI schema simultaneously. That is four abstraction layers in one crate. When ARA and album workflows land in Phase 4, dependency inversion will collapse if these layers are not separated. The split is not architectural cleanup — it is the prerequisite for Phase 4 not creating circular dependencies.
 
-Phase 3 naming is chosen to make this split clean. No circular dependencies will be created by it.
+Phase 4 must introduce a formal split into four crates before ARA integration begins:
+- `gain-dsp` — `Measurements`, `AudioBuffer` abstractions, ebur128 wrappers
+- `gain-analysis` — `RegionAnalysis`, `AnalysisBundle`, segmentation/classification types
+- `gain-decision` — presets, `RegionDecision`, `GainRegion`, gain math
+- `gain-protocol` — `GainRecommendationMap`, FFI structs, schema versioning, `AlbumAnchor`
+
+Phase 3 naming is chosen to make this split clean. No circular dependencies will be created by it. If this split is deferred past Phase 4 start, treat it as a Phase 4 blocker.
 
 **`RegionAnalysis` internal split:** Currently `RegionAnalysis` bundles DSP measurements, segmentation timing, classification output, and confidence scoring. For Phase 4 (ARA region editing, user overrides, alternate classifications), consider splitting into:
 ```rust
@@ -757,4 +814,4 @@ The public API doesn't change; internal mutability and Phase 4 override semantic
 
 **Album analysis scalability:** `analyze_album_files` is synchronous and sequential. For large catalogs, rayon parallelism at the `gain-api` level is the natural extension point. Phase 4.
 
-**Silence `confidence = 0.0` UI semantics:** The current spec uses `confidence = 0.0` as the canonical "no recommendation applicable" signal for silence regions. A downstream consumer that displays confidence as a reliability indicator (not a filter threshold) will show silence as "failed analysis." If this causes UI confusion, the correct fix is adding `is_applicable: bool` to `RegionDecision` rather than repurposing the confidence field further. Phase 4 UX work should resolve this.
+**`GainMapDto` update:** The Tauri `GainMapDto` in `gain-standalone` must add `is_applicable: bool` to its `GainRegionDto` serialization mirror to expose `RegionDecision.is_applicable` to the frontend.
