@@ -518,7 +518,32 @@ mod tests {
         assert!(rec.gain_db.is_finite(), "gain_db is not finite: {}", rec.gain_db);
         assert!(rec.confidence > 0.0, "confidence should be > 0, got {}", rec.confidence);
 
-        // 6. Free map and analysis — must not panic or double-free.
+        // 6. Byte-field assertions.
+        assert!(rec.region_type <= 7, "region_type byte must be 0-7, got {}", rec.region_type);
+        assert!(rec.content_class <= 6, "content_class byte must be 0-6, got {}", rec.content_class);
+        assert!(rec.is_applicable == 0 || rec.is_applicable == 1, "is_applicable must be 0 or 1, got {}", rec.is_applicable);
+
+        // 7. Free map and analysis — must not panic or double-free.
+        gain_stage_free_map(map);
+        gain_stage_free_analysis(analysis);
+    }
+
+    #[test]
+    fn phase3_preset_dialogue_broadcast_round_trip() {
+        // 1. Create a 1-second sine-like WAV fixture.
+        let fixture = write_wav_fixture(&make_wav(0.5, 44100, 44100));
+        let path_str = fixture.path().to_str().expect("temp path is valid UTF-8");
+        let c_path = CString::new(path_str).unwrap();
+
+        // 2. Step 1: begin_analysis with preset 6 (DialogueBroadcast) — must return non-null.
+        let analysis = gain_stage_begin_analysis(c_path.as_ptr(), 6);
+        assert!(!analysis.is_null(), "gain_stage_begin_analysis returned NULL for preset 6");
+
+        // 3. Step 2: generate_recommendation — must return non-null.
+        let map = gain_stage_generate_recommendation(analysis);
+        assert!(!map.is_null(), "gain_stage_generate_recommendation returned NULL");
+
+        // 4. Free map and analysis — must not panic or double-free.
         gain_stage_free_map(map);
         gain_stage_free_analysis(analysis);
     }
