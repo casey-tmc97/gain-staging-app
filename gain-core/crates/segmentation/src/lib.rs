@@ -66,6 +66,15 @@ pub fn segment(samples: &[f32], sample_rate: u32) -> Vec<Segment> {
         coalesced.push(run);
     }
 
+    // Absorb a leading short silence into the first active segment that follows it.
+    if coalesced.len() >= 2 {
+        let (first_is_silent, first_start, first_end) = coalesced[0];
+        if first_is_silent && (first_end - first_start) < MIN_SILENCE_FRAMES {
+            coalesced[1].1 = first_start; // extend next segment back to cover the short silence
+            coalesced.remove(0);
+        }
+    }
+
     // Convert frame indices to sample indices.
     let total = samples.len();
     coalesced
@@ -134,5 +143,16 @@ mod tests {
         let segs = segment(&samples, 44100);
         assert_eq!(segs[0].start_sample, 0);
         assert_eq!(segs.last().unwrap().end_sample, samples.len());
+    }
+
+    #[test]
+    fn leading_short_silence_is_merged() {
+        // 100ms silence (< 250ms) then 1s tone — should collapse to 1 segment
+        let mut samples = silence(4410); // 100 ms
+        samples.extend(tone(44100));    // 1 sec
+        let segs = segment(&samples, 44100);
+        assert_eq!(segs.len(), 1, "leading short silence should be absorbed into tone");
+        assert_eq!(segs[0].start_sample, 0);
+        assert_eq!(segs[0].end_sample, samples.len());
     }
 }
