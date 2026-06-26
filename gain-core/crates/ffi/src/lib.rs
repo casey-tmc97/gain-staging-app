@@ -368,6 +368,39 @@ pub extern "C" fn gain_stage_last_error_message() -> *const c_char {
 mod tests {
     use super::*;
     use std::ffi::CString;
+    use std::io::Write as _;
+
+    // ── WAV fixture helpers ───────────────────────────────────────────────────
+
+    /// Build a minimal PCM WAV in memory: mono, 16-bit, `n_samples` frames at `amplitude`.
+    fn make_wav(amplitude: f32, n_samples: usize, sample_rate: u32) -> Vec<u8> {
+        let amp_i16 = (amplitude * i16::MAX as f32) as i16;
+        let data_len = n_samples * 2;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+        b.extend_from_slice(b"WAVE");
+        b.extend_from_slice(b"fmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());  // PCM
+        b.extend_from_slice(&1u16.to_le_bytes());  // mono
+        b.extend_from_slice(&sample_rate.to_le_bytes());
+        b.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+        b.extend_from_slice(&2u16.to_le_bytes());  // block align
+        b.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&(data_len as u32).to_le_bytes());
+        for _ in 0..n_samples {
+            b.extend_from_slice(&amp_i16.to_le_bytes());
+        }
+        b
+    }
+
+    fn write_wav_fixture(bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::with_suffix(".wav").unwrap();
+        f.write_all(bytes).unwrap();
+        f
+    }
 
     // --- Phase 2 compat tests (updated assertions) ---
 
@@ -457,5 +490,36 @@ mod tests {
     #[test]
     fn free_analysis_null_is_noop() {
         gain_stage_free_analysis(std::ptr::null_mut());
+    }
+
+    // ── Phase 3 real-file round-trip ─────────────────────────────────────────
+
+    #[test]
+    fn phase3_two_step_api_round_trip_on_real_file() {
+        // 1. Create a 1-second sine-like WAV fixture (constant amplitude acts as tone).
+        let fixture = write_wav_fixture(&make_wav(0.5, 44100, 44100));
+        let path_str = fixture.path().to_str().expect("temp path is valid UTF-8");
+        let c_path = CString::new(path_str).unwrap();
+
+        // 2. Step 1: begin_analysis — must return non-null.
+        let analysis = gain_stage_begin_analysis(c_path.as_ptr(), 0 /* MixPrepConservative */);
+        assert!(!analysis.is_null(), "gain_stage_begin_analysis returned NULL");
+
+        // 3. Step 2: generate_recommendation — must return non-null.
+        let map = gain_stage_generate_recommendation(analysis);
+        assert!(!map.is_null(), "gain_stage_generate_recommendation returned NULL");
+
+        // 4. Recommendation count must be > 0.
+        let count = gain_stage_map_recommendation_count(map);
+        assert!(count > 0, "expected at least one recommendation, got 0");
+
+        // 5. First recommendation must have finite gain_db and confidence > 0.
+        let rec = gain_stage_map_get_recommendation(map, 0);
+        assert!(rec.gain_db.is_finite(), "gain_db is not finite: {}", rec.gain_db);
+        assert!(rec.confidence > 0.0, "confidence should be > 0, got {}", rec.confidence);
+
+        // 6. Free map and analysis — must not panic or double-free.
+        gain_stage_free_map(map);
+        gain_stage_free_analysis(analysis);
     }
 }

@@ -125,6 +125,7 @@ name = "ffi"
 version = "0.1.0"
 dependencies = [
  "gain-api",
+ "tempfile",
 ]
 
 [[package]]

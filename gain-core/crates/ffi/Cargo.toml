@@ -9,3 +9,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gain-api = { path = "../gain-api" }
+
+[dev-dependencies]
+tempfile = "3"

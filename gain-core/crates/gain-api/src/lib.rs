@@ -43,7 +43,7 @@ fn preset_to_params(preset: RecommendationPreset) -> (MeasureType, f32, PresetId
         RecommendationPreset::VoiceoverPrep        => (MeasureType::Lufs, -18.0, PresetId::VoiceoverPrep),
         RecommendationPreset::MusicStemPrep        => (MeasureType::Peak, -12.0, PresetId::MusicStemPrep),
         RecommendationPreset::FilmDialogue         => (MeasureType::Lufs, -27.0, PresetId::FilmDialogue),
-        RecommendationPreset::AlbumConsistency     => (MeasureType::Lufs,   0.0, PresetId::AlbumConsistency),
+        RecommendationPreset::AlbumConsistency     => (MeasureType::Lufs, -16.0, PresetId::AlbumConsistency),
         RecommendationPreset::Custom { measure, target_db } => (measure, target_db, PresetId::Custom),
     }
 }
