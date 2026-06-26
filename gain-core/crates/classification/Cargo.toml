@@ -2,3 +2,10 @@
 name = "classification"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+segmentation    = { path = "../segmentation" }
+analysis        = { path = "../analysis" }
+gain_map        = { path = "../gain_map" }
+gain-error      = { path = "../gain-error" }
+audio_ingestion = { path = "../audio_ingestion" }
