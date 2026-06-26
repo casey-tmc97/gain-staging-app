@@ -7,3 +7,4 @@ edition = "2021"
 audio_ingestion = { path = "../audio_ingestion" }
 gain_map        = { path = "../gain_map" }
 gain-error      = { path = "../gain-error" }
+ebur128         = "0.1"

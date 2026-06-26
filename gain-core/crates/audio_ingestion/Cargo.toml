@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 gain-error = { path = "../gain-error" }
-symphonia  = { version = "0.5", features = ["wav", "aiff", "pcm"] }
+symphonia  = { version = "0.5", features = ["wav", "aiff", "flac", "caf", "pcm"] }
 
 [dev-dependencies]
 tempfile = "3"

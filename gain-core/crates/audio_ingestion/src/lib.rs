@@ -16,6 +16,8 @@ pub struct AudioBuffer {
 pub enum ContainerFormat {
     Wav,
     Aiff,
+    Flac,
+    Caf,
 }
 
 #[derive(Debug)]
@@ -36,6 +38,8 @@ pub fn load_file(path: &std::path::Path) -> Result<(AudioBuffer, AudioMetadata),
     let container = match ext.as_deref() {
         Some("wav")                => ContainerFormat::Wav,
         Some("aif") | Some("aiff") => ContainerFormat::Aiff,
+        Some("flac")               => ContainerFormat::Flac,
+        Some("caf")                => ContainerFormat::Caf,
         other => return Err(GainError::UnsupportedFormat {
             format: other.unwrap_or("(no extension)").to_string(),
         }),
