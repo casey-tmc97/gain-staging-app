@@ -1,0 +1,20 @@
+[package]
+name = "gain-core-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+gain-api = { path = "../crates/gain-api" }
+
+[[bin]]
+name = "fuzz_analyze_pcm"
+path = "fuzz_targets/fuzz_analyze_pcm.rs"
+test = false
+bench = false
