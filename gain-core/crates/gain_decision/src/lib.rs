@@ -26,7 +26,7 @@ pub fn recommend_regions(
                         is_applicable: false,
                         gain_db: 0.0,
                         confidence: 1.0,
-                        reason: "Region is silence — no gain recommendation applies".to_string(),
+                        reason: "silence".to_string(),
                     },
                 };
             }
