@@ -38,12 +38,12 @@ typedef struct GainStageAnalysis GainStageAnalysis;
 #define GAIN_STAGE_PRESET_ANALOG_CONSOLE         3
 #define GAIN_STAGE_PRESET_ANALOG_CONSOLE_HOT     4
 #define GAIN_STAGE_PRESET_DIALOGUE_PREP          5
-#define GAIN_STAGE_PRESET_FILM_DIALOGUE          6
-#define GAIN_STAGE_PRESET_ALBUM_CONSISTENCY      7
-#define GAIN_STAGE_PRESET_MUSIC_STEM_PREP        8
-#define GAIN_STAGE_PRESET_ANALOGUE_CONSOLE       9
-#define GAIN_STAGE_PRESET_ANALOGUE_HOT          10
-#define GAIN_STAGE_PRESET_DIALOGUE_BROADCAST    11
+#define GAIN_STAGE_PRESET_DIALOGUE_BROADCAST     6
+#define GAIN_STAGE_PRESET_PODCAST_PREP           7
+#define GAIN_STAGE_PRESET_VOICEOVER_PREP         8
+#define GAIN_STAGE_PRESET_MUSIC_STEM_PREP        9
+#define GAIN_STAGE_PRESET_FILM_DIALOGUE         10
+#define GAIN_STAGE_PRESET_ALBUM_CONSISTENCY     11
 
 /* Error codes returned by gain_stage_last_error_code */
 #define GAIN_STAGE_ERR_NONE             0
@@ -68,11 +68,11 @@ typedef struct {
 typedef struct {
     double  start_time;
     double  end_time;
+    float   gain_db;
+    float   confidence;
     uint8_t region_type;   /* GAIN_STAGE_REGION_TYPE_* */
     uint8_t content_class; /* GAIN_STAGE_CLASS_* */
-    float   gain_db;
     uint8_t is_applicable; /* 0 = false, 1 = true */
-    float   confidence;
 } GainStageRegionV2;
 
 /*
