@@ -122,7 +122,7 @@ uint32_t gain_stage_map_version(const GainStageMap* map);
  * Returns NULL on error; call gain_stage_last_error_code() for details.
  * Caller must release with gain_stage_free_analysis().
  */
-GainStageAnalysis* gain_stage_begin_analysis(const char* path, uintptr_t path_len, uint8_t preset_id);
+GainStageAnalysis* gain_stage_begin_analysis(const char* path, uint8_t preset_id);
 
 /*
  * Step 2: apply the preset stored in the analysis handle and produce a map.
