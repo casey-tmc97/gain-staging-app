@@ -9,6 +9,8 @@ gain_decision   = { path = "../gain_decision" }
 gain-error      = { path = "../gain-error" }
 audio_ingestion = { path = "../audio_ingestion" }
 analysis        = { path = "../analysis" }
+segmentation    = { path = "../segmentation" }
+classification  = { path = "../classification" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -54,6 +54,13 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "classification"
 version = "0.1.0"
+dependencies = [
+ "analysis",
+ "audio_ingestion",
+ "gain-error",
+ "gain_map",
+ "segmentation",
+]
 
 [[package]]
 name = "dasp_frame"
@@ -126,9 +133,11 @@ version = "0.1.0"
 dependencies = [
  "analysis",
  "audio_ingestion",
+ "classification",
  "gain-error",
  "gain_decision",
  "gain_map",
+ "segmentation",
  "tempfile",
 ]
 
