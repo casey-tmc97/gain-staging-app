@@ -1,5 +1,5 @@
 use gain_api::{
-    analyze_album_files, compute_album_anchor, generate_album_recommendations,
+    analyze_album_files, analyze_pcm, compute_album_anchor, generate_album_recommendations,
     AlbumAnchorMethod, GainError, RecommendationPreset,
 };
 use std::io::Write;
@@ -67,7 +67,7 @@ fn compute_album_anchor_uses_median_lufs() {
         .into_iter()
         .filter_map(|r| r.ok())
         .collect();
-    let anchor = compute_album_anchor(&results).unwrap();
+    let anchor = compute_album_anchor(&results, AlbumAnchorMethod::Median).unwrap();
     assert!(matches!(anchor.method, AlbumAnchorMethod::Median));
     // median LUFS of 3 files at different amplitudes
     let lufs_values: Vec<f32> = results.iter()
@@ -90,7 +90,8 @@ fn compute_album_anchor_fails_when_no_lufs_data() {
         .into_iter()
         .filter_map(|r| r.ok())
         .collect();
-    let result = compute_album_anchor(&results);
+    let _ = results; // results are no longer relevant; empty slice triggers the guard
+    let result = compute_album_anchor(&[], AlbumAnchorMethod::Median);
     assert!(matches!(result, Err(GainError::AnalysisFailure { .. })));
 }
 
@@ -103,7 +104,7 @@ fn generate_album_recommendations_returns_one_map_per_file() {
         .into_iter()
         .filter_map(|r| r.ok())
         .collect();
-    let anchor = compute_album_anchor(&results).unwrap();
+    let anchor = compute_album_anchor(&results, AlbumAnchorMethod::Median).unwrap();
     let maps = generate_album_recommendations(
         &results, &anchor, RecommendationPreset::AlbumConsistency,
     ).unwrap();
@@ -124,7 +125,7 @@ fn generate_album_recommendations_louder_file_gets_negative_gain() {
         .into_iter()
         .filter_map(|r| r.ok())
         .collect();
-    let anchor = compute_album_anchor(&results).unwrap();
+    let anchor = compute_album_anchor(&results, AlbumAnchorMethod::Median).unwrap();
     // anchor ≈ median (soft files' LUFS) — louder than loud file's LUFS
     let maps = generate_album_recommendations(
         &results, &anchor, RecommendationPreset::AlbumConsistency,
@@ -133,4 +134,31 @@ fn generate_album_recommendations_louder_file_gets_negative_gain() {
     let loud_gain = maps[0].recommendations[0].decision.gain_db;
     assert!(loud_gain < 0.0,
         "louder-than-anchor file should get negative gain, got {loud_gain}");
+}
+
+#[test]
+fn compute_album_anchor_median_even_length_averages_middle_pair() {
+    // Use analyze_pcm to create two AnalysisResults with known measured values.
+    // 5 seconds of samples at 44100 Hz is long enough to produce Verified LUFS.
+    let n_samples = 44100 * 5;
+    let samples_loud: Vec<f32> = vec![0.5_f32; n_samples];
+    let samples_soft: Vec<f32> = vec![0.1_f32; n_samples];
+
+    let r1 = analyze_pcm(&samples_loud, 44100, 1, 5.0).unwrap();
+    let r2 = analyze_pcm(&samples_soft, 44100, 1, 5.0).unwrap();
+
+    // Capture the exact values the function will use (integrated_lufs or rms_dbfs fallback)
+    let v1 = r1.measurements.integrated_lufs.value.unwrap_or(r1.measurements.rms_dbfs);
+    let v2 = r2.measurements.integrated_lufs.value.unwrap_or(r2.measurements.rms_dbfs);
+    let expected = (v1 + v2) / 2.0;
+
+    let results = vec![r1, r2];
+    let anchor = compute_album_anchor(&results, AlbumAnchorMethod::Median).unwrap();
+
+    assert!(
+        (anchor.target_lufs - expected).abs() < 0.001,
+        "even-length median should average the two middle values: expected {expected}, got {}",
+        anchor.target_lufs
+    );
+    assert!(matches!(anchor.method, AlbumAnchorMethod::Median));
 }

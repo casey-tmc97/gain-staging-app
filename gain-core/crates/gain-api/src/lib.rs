@@ -118,28 +118,49 @@ pub fn analyze_album_files(
 }
 
 /// Album pass 2: compute a loudness anchor from successful analyses.
-/// Uses the median integrated LUFS across all provided results.
-/// Returns AnalysisFailure if no result has Verified integrated LUFS.
+/// Dispatches on `method` to pick the anchor value.
+/// Falls back to rms_dbfs when integrated LUFS is unavailable for a track.
+/// Returns AnalysisFailure if `results` is empty.
 pub fn compute_album_anchor(
     results: &[AnalysisResult],
+    method: AlbumAnchorMethod,
 ) -> Result<AlbumAnchor, GainError> {
-    let mut lufs_values: Vec<f32> = results
-        .iter()
-        .filter_map(|r| r.measurements.integrated_lufs.value)
-        .collect();
-
-    if lufs_values.is_empty() {
+    if results.is_empty() {
         return Err(GainError::AnalysisFailure {
-            details: "no Verified integrated LUFS data in album results".to_string(),
+            details: "no results to anchor".to_string(),
         });
     }
 
-    lufs_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = lufs_values[lufs_values.len() / 2];
+    let mut lufs_values: Vec<f32> = results
+        .iter()
+        .map(|r| {
+            r.measurements
+                .integrated_lufs
+                .value
+                .unwrap_or(r.measurements.rms_dbfs)
+        })
+        .collect();
+
+    let target_lufs = match method {
+        AlbumAnchorMethod::Median => {
+            lufs_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let len = lufs_values.len();
+            if len % 2 == 0 {
+                (lufs_values[len / 2 - 1] + lufs_values[len / 2]) / 2.0
+            } else {
+                lufs_values[len / 2]
+            }
+        }
+        AlbumAnchorMethod::Maximum => lufs_values
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max),
+        AlbumAnchorMethod::Custom(v) => v,
+    };
 
     Ok(AlbumAnchor {
-        target_lufs: median,
-        method: AlbumAnchorMethod::Median,
+        target_lufs,
+        method,
     })
 }
 
