@@ -108,3 +108,67 @@ pub fn generate_region_recommendations(
     let (measure, target_db, preset_id) = preset_to_params(preset);
     gain_decision::recommend_regions(bundle, measure, target_db, preset_id)
 }
+
+/// Album pass 1: analyze each file independently.
+/// Returns one Result per path; individual failures do not abort the batch.
+pub fn analyze_album_files(
+    paths: &[&std::path::Path],
+) -> Vec<Result<AnalysisResult, GainError>> {
+    paths.iter().map(|p| analyze_file(p)).collect()
+}
+
+/// Album pass 2: compute a loudness anchor from successful analyses.
+/// Uses the median integrated LUFS across all provided results.
+/// Returns AnalysisFailure if no result has Verified integrated LUFS.
+pub fn compute_album_anchor(
+    results: &[AnalysisResult],
+) -> Result<AlbumAnchor, GainError> {
+    let mut lufs_values: Vec<f32> = results
+        .iter()
+        .filter_map(|r| r.measurements.integrated_lufs.value)
+        .collect();
+
+    if lufs_values.is_empty() {
+        return Err(GainError::AnalysisFailure {
+            details: "no Verified integrated LUFS data in album results".to_string(),
+        });
+    }
+
+    lufs_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = lufs_values[lufs_values.len() / 2];
+
+    Ok(AlbumAnchor {
+        target_lufs: median,
+        method: AlbumAnchorMethod::Median,
+    })
+}
+
+/// Album pass 3: generate per-file gain recommendations relative to the anchor.
+pub fn generate_album_recommendations(
+    results: &[AnalysisResult],
+    anchor: &AlbumAnchor,
+    preset: RecommendationPreset,
+) -> Result<Vec<GainRecommendationMap>, GainError> {
+    let (_, _, preset_id) = preset_to_params(preset);
+    results
+        .iter()
+        .map(|result| {
+            let total_samples =
+                (result.metadata.duration_secs * result.metadata.sample_rate as f64) as usize;
+            let bundle = AnalysisBundle {
+                regions: vec![RegionAnalysis::whole_file_stable(
+                    result.measurements.clone(),
+                    total_samples,
+                )],
+                sample_rate: result.metadata.sample_rate,
+                total_samples,
+            };
+            gain_decision::recommend_regions(
+                &bundle,
+                MeasureType::Lufs,
+                anchor.target_lufs,
+                preset_id.clone(),
+            )
+        })
+        .collect()
+}
